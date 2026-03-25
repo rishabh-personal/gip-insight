@@ -1,0 +1,57 @@
+import { Controller, Get, Param, Query, NotFoundException } from '@nestjs/common';
+import { ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
+import { EnterprisesService } from './enterprises.service';
+import { PaginationDto } from '../common/dto/pagination.dto';
+
+@ApiTags('Enterprises')
+@Controller('api/dashboard/enterprises')
+export class EnterprisesController {
+  constructor(private readonly svc: EnterprisesService) {}
+
+  @Get()
+  @ApiOperation({ summary: 'List enterprises that have private apps in apps collection — fast, no metrics (STORY-001)' })
+  @ApiQuery({ name: 'search', required: false })
+  @ApiQuery({ name: 'appName', required: false })
+  async list(
+    @Query('search') search?: string,
+    @Query('appName') appName?: string,
+  ): Promise<any> {
+    return this.svc.listEnterpriseStubs({ search, appName });
+  }
+
+  @Get('apps')
+  @ApiOperation({ summary: 'List all unique apps used across connectors (for filter dropdown)' })
+  async apps(): Promise<any> {
+    const data = await this.svc.listApps();
+    return { data };
+  }
+
+  @Get(':ssoEnterpriseId/metrics')
+  @ApiOperation({ summary: 'Async metrics for a single enterprise — job stats + sync gap (STORY-001)' })
+  async metrics(
+    @Param('ssoEnterpriseId') ssoEnterpriseId: string,
+    @Query() pagination: PaginationDto,
+  ): Promise<any> {
+    const result = await this.svc.getEnterpriseMetrics(
+      ssoEnterpriseId,
+      pagination.fromDate,
+      pagination.toDate,
+    );
+    return { data: result };
+  }
+
+  @Get(':ssoEnterpriseId')
+  @ApiOperation({ summary: 'Enterprise detail with connectors and app health (STORY-002)' })
+  async detail(
+    @Param('ssoEnterpriseId') ssoEnterpriseId: string,
+    @Query() pagination: PaginationDto,
+  ): Promise<any> {
+    const result = await this.svc.getEnterpriseDetail(
+      ssoEnterpriseId,
+      pagination.fromDate,
+      pagination.toDate,
+    );
+    if (!result) throw new NotFoundException('Enterprise not found');
+    return { data: result };
+  }
+}

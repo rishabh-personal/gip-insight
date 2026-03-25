@@ -1,0 +1,108 @@
+import { Injectable, Logger } from '@nestjs/common';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model } from 'mongoose';
+import { DipJob } from '../schemas/dip-job.schema';
+import { Enterprise } from '../schemas/enterprise.schema';
+import { MysqlTenantService } from '../database/mysql-tenant.service';
+
+@Injectable()
+export class SyncGapService {
+  private readonly logger = new Logger(SyncGapService.name);
+
+  constructor(
+    @InjectModel(DipJob.name) private jobModel: Model<DipJob>,
+    @InjectModel(Enterprise.name) private enterpriseModel: Model<Enterprise>,
+    private readonly mysql: MysqlTenantService,
+  ) {}
+
+  async getSyncGap(
+    ssoEnterpriseId: string,
+    from: Date,
+    to: Date,
+    opts: { transactionType?: string; storeId?: string } = {},
+  ) {
+    // Find enterprise and its db_name
+    const enterprise = await this.enterpriseModel.findOne({ ssoEnterpriseId }).lean();
+    if (!enterprise) return { data: null };
+
+    const vendors = await this.mysql.query(
+      this.mysql.getMasterDb(),
+      `SELECT db_name, id FROM vendor WHERE sso_enterprise_id = ? AND deleted = 0 LIMIT 1`,
+      [ssoEnterpriseId],
+    );
+    const vendor = vendors[0] as any;
+    if (!vendor?.db_name) {
+      return {
+        data: {
+          enterprise: { ssoEnterpriseId, tradeName: enterprise.tradeName },
+          zwingCount: null,
+          gipCount: 0,
+          gap: null,
+          missedEvents: [],
+          error: 'No Zwing db_name configured for this enterprise',
+        },
+      };
+    }
+
+    // Build Zwing invoice query
+    let invoiceWhere = `created_at BETWEEN ? AND ? AND deleted_at IS NULL`;
+    const invoiceParams: any[] = [from, to];
+    if (opts.transactionType) {
+      invoiceWhere += ` AND transaction_type = ?`;
+      invoiceParams.push(opts.transactionType);
+    }
+    if (opts.storeId) {
+      invoiceWhere += ` AND store_id = ?`;
+      invoiceParams.push(opts.storeId);
+    }
+
+    const [zwingRows, gipJobRows] = await Promise.all([
+      this.mysql.query(
+        vendor.db_name,
+        `SELECT invoice_id, store_id, transaction_type, transaction_sub_type, status, created_at
+         FROM invoices WHERE ${invoiceWhere}`,
+        invoiceParams,
+      ).catch((e) => {
+        this.logger.warn(`Zwing query failed: ${e.message}`);
+        return [] as any[];
+      }),
+      this.jobModel
+        .find({
+          ssoEnterpriseId,
+          transactionDate: { $gte: from, $lte: to },
+        })
+        .select('refDocNo')
+        .lean(),
+    ]);
+
+    const gipSet = new Set(gipJobRows.map((j) => j.refDocNo));
+    const zwingIds = new Set((zwingRows as any[]).map((r) => r.invoice_id));
+
+    const missedEvents = (zwingRows as any[]).filter((r) => !gipSet.has(r.invoice_id));
+
+    return {
+      data: {
+        enterprise: {
+          ssoEnterpriseId,
+          tradeName: enterprise.tradeName,
+          dbName: vendor.db_name,
+        },
+        zwingCount: (zwingRows as any[]).length,
+        gipCount: gipSet.size,
+        gap: missedEvents.length,
+        syncRate:
+          (zwingRows as any[]).length > 0
+            ? Math.round(
+                (((zwingRows as any[]).length - missedEvents.length) /
+                  (zwingRows as any[]).length) *
+                  100 *
+                  10,
+              ) / 10
+            : 100,
+        missedEvents: missedEvents.slice(0, 500),
+        from,
+        to,
+      },
+    };
+  }
+}

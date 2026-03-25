@@ -1,0 +1,564 @@
+[
+  {
+    "id": "STORY-001",
+    "title": "Enterprise Health Overview Dashboard",
+    "epic": "Enterprise & Integration Health",
+    "priority": "P0",
+    "status": "pending",
+    "description": "As an internal ops/engineering user, I want a top-level dashboard that lists all enterprises onboarded in GIP along with a real-time health snapshot so I can immediately identify which enterprise has sync or delivery issues.",
+    "userStory": "As an ops engineer, I want to see all enterprises in a single view with their GIP sync health so I can quickly spot broken integrations without drilling into each enterprise individually.",
+    "acceptanceCriteria": [
+      "List all active enterprises from GIP `enterprises` collection (where deletedOn is null and liveStatus = 1)",
+      "Each row shows: Enterprise name (tradeName), baCode, ssoEnterpriseId, linked Zwing vendor ID (meta.zwingVId)",
+      "Each row shows aggregated metrics for a configurable default time window (last 24h): total Zwing invoices generated, total GIP ingress events captured, sync gap count (Zwing invoices with no matching GIP job), total GIP jobs, success count, failed count, failure rate %",
+      "Overall health status badge per enterprise: GREEN (failure rate < 2%), YELLOW (2–10%), RED (> 10% or any debezium gap detected)",
+      "Table is paginated (25 per page), sortable by enterprise name, failure rate, sync gap",
+      "Global date-range filter (presets: last 1h, 6h, 24h, 7d, 30d; custom range) applied to all metrics",
+      "Search/filter by enterprise name or baCode",
+      "Clicking an enterprise row navigates to the Enterprise Detail view (STORY-002)"
+    ],
+    "technicalDetails": {
+      "dataSources": {
+        "gipMongo": {
+          "collection": "enterprises",
+          "fields": ["ssoEnterpriseId", "tradeName", "baCode", "liveStatus", "deletedOn", "meta.zwingVId"],
+          "query": "{ deletedOn: null, liveStatus: 1 }"
+        },
+        "zwingMySQL": {
+          "database": "zwing_master",
+          "table": "vendor",
+          "joinKey": "sso_enterprise_id → enterprises.ssoEnterpriseId",
+          "fields": ["id", "name", "sso_enterprise_id", "db_name", "status", "db_type", "db_config_id"]
+        },
+        "gipJobsAggregation": {
+          "collection": "dipJobs",
+          "groupBy": "ssoEnterpriseId",
+          "dateFilter": "transactionDate",
+          "metrics": "count by status (success, failed, pending, processing)"
+        }
+      },
+      "invoiceCountStrategy": "Query each enterprise's tenant DB (db_name from vendor table) for invoice count in date range. Use connection pooling against the shared MySQL instance; route using db_name from vendor table.",
+      "reconciliationKey": "Zwing invoice_id matches dipJobs.refDocNo",
+      "apiEndpoints": [
+        "GET /api/dashboard/enterprises?from=&to=&search=&page=&limit="
+      ],
+      "notes": [
+        "Zwing tenant DBs are on the same MySQL instance; use db_name from vendor table to switch schema per enterprise",
+        "To detect sync gap: COUNT(Zwing invoices) - COUNT(distinct dipJobs.refDocNo WHERE ssoEnterpriseId matches) in same time window",
+        "Cache enterprise list; refresh every 5 minutes"
+      ]
+    }
+  },
+  {
+    "id": "STORY-002",
+    "title": "Enterprise Detail View with Connector & App Health",
+    "epic": "Enterprise & Integration Health",
+    "priority": "P0",
+    "status": "pending",
+    "description": "As an ops engineer, I want a detailed view for a single enterprise showing all its GIP connectors, the apps connected, and the health of each connector so I can pinpoint which integration path is broken.",
+    "userStory": "As an ops engineer, I want to drill into a specific enterprise and see all connector pairs (e.g., Zwing → ERP, Zwing → CRM) with their event-level health so I can diagnose which connector or event type is failing.",
+    "acceptanceCriteria": [
+      "Show enterprise header: tradeName, baCode, ssoEnterpriseId, Zwing vendor ID, Zwing db_name",
+      "List all connectors for this enterprise from GIP `connectors` collection, showing: connector name, outbound app name, inbound app name, isEnabled status, deletedOn (deleted badge if soft-deleted)",
+      "For each connector, show aggregated job metrics in the selected date range: total jobs, success, failed, pending, failure rate %",
+      "For each connector, show list of mapped event types (from connectorEventMappings: outboundEvent.name + inboundEvent.name)",
+      "Connector status badge: ACTIVE (isEnabled true, deletedOn null), DISABLED (isEnabled false), DELETED (deletedOn not null)",
+      "Date range filter applies to job metrics",
+      "Clicking a connector row expands to show per-event-type job breakdown (inline)",
+      "Navigation breadcrumb: Dashboard > Enterprise Name"
+    ],
+    "technicalDetails": {
+      "dataSources": {
+        "connectors": {
+          "collection": "connectors",
+          "filter": "{ ssoEnterpriseId: <id>, deletedOn: null }",
+          "fields": ["_id", "name", "outboundAppId", "inboundAppId", "ssoEnterpriseId", "isEnabled", "deletedOn"]
+        },
+        "apps": {
+          "collection": "apps",
+          "purpose": "Resolve outboundAppId and inboundAppId to app names",
+          "fields": ["_id", "name", "refId", "inboundEnabled", "outboundEnabled"]
+        },
+        "connectorEventMappings": {
+          "collection": "connectorEventMappings",
+          "filter": "{ connectorId: <connectorId> }",
+          "fields": ["_id", "connectorId", "outboundEventId", "inboundEventId", "isEnabled", "isRetryable"]
+        },
+        "events": {
+          "collection": "events",
+          "purpose": "Resolve outboundEventId and inboundEventId to event names and eventCodes",
+          "fields": ["_id", "name", "eventCode", "direction", "appId"]
+        },
+        "dipJobs": {
+          "collection": "dipJobs",
+          "groupBy": ["connectorId", "connectorAppEventId"],
+          "dateFilter": "transactionDate",
+          "metrics": "count by status"
+        }
+      },
+      "apiEndpoints": [
+        "GET /api/dashboard/enterprises/:ssoEnterpriseId",
+        "GET /api/dashboard/enterprises/:ssoEnterpriseId/connectors?from=&to="
+      ]
+    }
+  },
+  {
+    "id": "STORY-003",
+    "title": "Debezium Sync Gap Detection (Zwing → GIP Reconciliation)",
+    "epic": "Debezium Sync Monitoring",
+    "priority": "P0",
+    "status": "pending",
+    "description": "As an ops engineer, I want to compare the number of invoices generated in Zwing against the number of events captured in GIP via Debezium so I can identify missed events caused by connector breaks or Kafka lag.",
+    "userStory": "As an ops engineer, I want to see for each enterprise how many Zwing invoices were NOT captured as GIP ingress events in a given time window so I can detect and report Debezium failures early.",
+    "acceptanceCriteria": [
+      "For a selected enterprise and date range, show side-by-side counts: 'Zwing Invoice Count' (from tenant DB) vs 'GIP Events Received' (distinct dipJobs.refDocNo)",
+      "Show 'Sync Gap' = Zwing Invoice Count - GIP Events Received, highlighted RED if gap > 0",
+      "List the specific invoice_ids (refDocNo) present in Zwing but absent in GIP dipJobs — these are the missed events",
+      "Missed events table shows: invoice_id, store_id, transaction_type, transaction_sub_type, invoice date, Zwing status",
+      "Ability to filter missed events by transaction_type (sales/return), transaction_sub_type, store_id",
+      "Show event breakdown by Kafka topic / eventCode (invoices, gv_invoices, etc.) to identify which topic is lagging",
+      "Refresh button to re-run reconciliation query on demand",
+      "Export missed events list as CSV"
+    ],
+    "technicalDetails": {
+      "zwingQuery": {
+        "database": "<enterprise db_name from vendor table>",
+        "table": "invoices",
+        "query": "SELECT invoice_id, store_id, transaction_type, transaction_sub_type, status, created_at FROM invoices WHERE created_at BETWEEN :from AND :to AND deleted_at IS NULL",
+        "note": "Filter out voided/deleted invoices as appropriate. status IN ('Success', 'Processing') for valid invoices"
+      },
+      "gipQuery": {
+        "collection": "dipJobs",
+        "aggregation": "db.dipJobs.aggregate([{ $match: { ssoEnterpriseId: <id>, transactionDate: { $gte: from, $lte: to } } }, { $group: { _id: '$refDocNo' } }])",
+        "note": "refDocNo in dipJobs corresponds to invoice_id in Zwing invoices table (set via events.refDocPath: 'after.invoice_id')"
+      },
+      "reconciliationLogic": "SET(Zwing invoice_ids) MINUS SET(GIP dipJobs.refDocNo) = missed events. Cross-reference ingressEventLogId presence to confirm Debezium received vs GIP consumed.",
+      "apiEndpoints": [
+        "GET /api/dashboard/enterprises/:ssoEnterpriseId/sync-gap?from=&to=&transactionType=&storeId=",
+        "GET /api/dashboard/enterprises/:ssoEnterpriseId/sync-gap/missed-events?from=&to="
+      ],
+      "performanceNote": "Zwing queries run against production MySQL — use read replicas. Paginate missed events list. For large enterprises, run reconciliation as background job and cache results with TTL."
+    }
+  },
+  {
+    "id": "STORY-004",
+    "title": "GIP Job Status Dashboard per Enterprise",
+    "epic": "GIP Job Delivery Monitoring",
+    "priority": "P0",
+    "status": "pending",
+    "description": "As an ops engineer, I want to see the real-time status of GIP jobs (pending, processing, success, failed) for each enterprise across all connectors and event types so I can monitor end-to-end delivery health.",
+    "userStory": "As an ops engineer, I want a job status summary for each enterprise so I can know whether events received from Zwing are being successfully delivered to downstream apps like ERP or CRM.",
+    "acceptanceCriteria": [
+      "Show job status summary for selected enterprise and date range: total, pending, processing, success, failed counts with % breakdown",
+      "Breakdown by connector (Zwing→ERP, Zwing→CRM, etc.): each connector row shows success/failed counts",
+      "Breakdown by event type (eventCode): table showing event name, eventCode, volume, success rate, avg processing time",
+      "Time-series chart: job volume and failure rate over the selected time window (hourly buckets)",
+      "Top failed events list ordered by failure count",
+      "Filter by: connector, inbound app, event type, status",
+      "Auto-refresh every 60 seconds when date range includes 'now'",
+      "Failure rate RED threshold configurable (default 5%)"
+    ],
+    "technicalDetails": {
+      "dataSources": {
+        "dipJobs": {
+          "collection": "dipJobs",
+          "aggregation": [
+            "Match by ssoEnterpriseId and transactionDate range",
+            "Group by connectorId, connectorAppEventId, status",
+            "Lookup connectors to get connector name and app names",
+            "Lookup connectorEventMappings → events to get eventCode and event name"
+          ],
+          "statusValues": ["pending", "processing", "success", "failed"]
+        }
+      },
+      "timeSeries": "Bucket by transactionDate using MongoDB $dateTrunc (1-hour buckets), group by status, return counts per bucket",
+      "apiEndpoints": [
+        "GET /api/dashboard/enterprises/:ssoEnterpriseId/jobs/summary?from=&to=&connectorId=&eventId=",
+        "GET /api/dashboard/enterprises/:ssoEnterpriseId/jobs/timeseries?from=&to=&bucket=1h"
+      ]
+    }
+  },
+  {
+    "id": "STORY-005",
+    "title": "Failed Jobs List with Error Details",
+    "epic": "GIP Job Delivery Monitoring",
+    "priority": "P0",
+    "status": "pending",
+    "description": "As an ops engineer, I want to see a list of all failed GIP jobs with error messages, retry counts, and affected transactions so I can investigate and resolve delivery failures.",
+    "userStory": "As an ops engineer, I want to view all failed jobs with full context (enterprise, connector, event type, invoice ID, error message, retry count) so I can diagnose root causes and take corrective action.",
+    "acceptanceCriteria": [
+      "List all failed jobs (status = 'failed') for the selected filters, paginated (50 per page)",
+      "Each row shows: enterprise name, connector name, outbound app → inbound app, eventCode, refDocNo (invoice_id), transactionDate, retryCount, isRetryable, latest error message (from error field or timestamps array last entry)",
+      "Sort by: transactionDate (newest first, default), retryCount (highest first), enterprise name",
+      "Filters: enterprise (multi-select), connector, inbound app, event type, date range, retryCount range",
+      "Clicking a row opens Job Detail panel (see STORY-006)",
+      "Bulk selection: select multiple jobs and trigger bulk retry (only for isRetryable=true jobs)",
+      "Export filtered failed jobs to CSV",
+      "Show 'isRetryable' badge — non-retryable jobs shown with explanation tooltip"
+    ],
+    "technicalDetails": {
+      "dataSources": {
+        "dipJobs": {
+          "collection": "dipJobs",
+          "filter": "{ status: 'failed', transactionDate: { $gte: from, $lte: to } }",
+          "additionalFilters": "ssoEnterpriseId, connectorId, connectorAppEventId",
+          "fields": ["_id", "connectorId", "connectorAppEventId", "ssoEnterpriseId", "refDocNo", "status", "error", "retryCount", "isRetryable", "transactionDate", "inboundAppId", "outboundAppId", "timestamps"],
+          "lookups": ["connectors (name)", "events (eventCode, name via connectorAppEventId)", "enterprises (tradeName, baCode)"]
+        }
+      },
+      "errorExtraction": "Use dipJobs.error field. If empty, use last entry in dipJobs.timestamps array where status='failed' for error context.",
+      "apiEndpoints": [
+        "GET /api/dashboard/jobs/failed?from=&to=&ssoEnterpriseId=&connectorId=&page=&limit=",
+        "POST /api/dashboard/jobs/retry (body: { jobIds: [] })"
+      ]
+    }
+  },
+  {
+    "id": "STORY-006",
+    "title": "Job Detail & Task-Level Drill Down",
+    "epic": "GIP Job Delivery Monitoring",
+    "priority": "P1",
+    "status": "pending",
+    "description": "As an ops engineer, I want to see the full details of a single GIP job including all its tasks (filter, transform, http dispatch, etc.) with individual statuses and errors so I can understand exactly where in the pipeline a failure occurred.",
+    "userStory": "As an ops engineer, I want to open a specific job and see its execution timeline, each task's status and error, so I can identify the precise step (e.g., HTTP dispatch to ERP) that failed.",
+    "acceptanceCriteria": [
+      "Job header shows: jobId, enterprise, connector, eventCode, refDocNo (invoice_id), transactionDate, overall status, retryCount, isRetryable",
+      "Status timeline: visual stepper showing all timestamps entries (pending → processing → success/failed) with timestamps",
+      "Task list from dipJobTasks collection: task name, type (filter/http/transform), status, retryCount, error message, createdAt, updatedAt",
+      "For HTTP tasks: show httpMetadataPath reference with note to fetch metadata from object storage for request/response details",
+      "For failed tasks: show full error message prominently",
+      "Show continueOnFailure flag per task",
+      "Parent-child task relationships visualized (parentId linkage)",
+      "Retry button for the whole job if isRetryable=true",
+      "Navigation: back to failed jobs list, breadcrumb with enterprise and connector"
+    ],
+    "technicalDetails": {
+      "dataSources": {
+        "dipJobs": {
+          "collection": "dipJobs",
+          "fields": ["all fields"],
+          "lookups": ["enterprises", "connectors", "events"]
+        },
+        "dipJobTasks": {
+          "collection": "dipJobTasks",
+          "filter": "{ jobId: <jobId> }",
+          "fields": ["_id", "jobId", "name", "type", "status", "retryCount", "error", "continueOnFailure", "httpMetadataPath", "inputDataPath", "outputDataPath", "timestamps", "parentId", "eventTaskId"],
+          "sort": "createdAt ASC"
+        }
+      },
+      "taskTypes": ["filter", "http", "transform", "enrichment"],
+      "apiEndpoints": [
+        "GET /api/dashboard/jobs/:jobId",
+        "GET /api/dashboard/jobs/:jobId/tasks",
+        "POST /api/dashboard/jobs/:jobId/retry"
+      ]
+    }
+  },
+  {
+    "id": "STORY-007",
+    "title": "Invoice / Transaction Trace (End-to-End Lookup)",
+    "epic": "Transaction Traceability",
+    "priority": "P0",
+    "status": "pending",
+    "description": "As an ops engineer or support agent, I want to search for a specific invoice ID and see its complete journey from Zwing → Debezium → GIP → downstream app so I can answer 'did this invoice reach the ERP?' in seconds.",
+    "userStory": "As an ops engineer, I want to enter an invoice_id and see the full sync pipeline status for that invoice — from Zwing invoice record through Debezium capture and all GIP jobs — so I can quickly confirm or diagnose delivery.",
+    "acceptanceCriteria": [
+      "Search input accepts invoice_id (Zwing format, e.g. CLPA010125263285) or partial match",
+      "Step 1 - Zwing Record: Show invoice details from Zwing tenant DB: invoice_id, store_id, transaction_type, transaction_sub_type, status (Success/Failed/Void/Processing), created_at, total, v_id",
+      "Step 2 - GIP Ingress: Show whether a dipJob exists with matching refDocNo. If yes: show ingressEventLogId, transactionDate, eventCode. If no: show 'NOT CAPTURED — possible Debezium miss'",
+      "Step 3 - GIP Jobs: List all dipJobs with this refDocNo (could be multiple connectors): connector name, outbound→inbound app, status, retryCount",
+      "Step 4 - Task Execution: For each job, show task summary (total tasks, success, failed)",
+      "Overall pipeline status: SYNCED (all jobs success), PARTIAL (some jobs failed), NOT SYNCED (no GIP job found)",
+      "Ability to search across all enterprises (requires knowing enterprise context or global search with ssoEnterpriseId lookup)",
+      "Support searching by enterprise scope to narrow Zwing DB query"
+    ],
+    "technicalDetails": {
+      "searchFlow": [
+        "1. User enters invoice_id",
+        "2. Query GIP dipJobs: db.dipJobs.find({ refDocNo: <invoice_id> }) — no enterprise scope needed in GIP",
+        "3. From dipJobs, get ssoEnterpriseId → lookup enterprise → get meta.zwingVId → lookup vendor.db_name",
+        "4. Query Zwing tenant DB (db_name): SELECT * FROM invoices WHERE invoice_id = :invoiceId",
+        "5. Fetch all dipJobTasks for each matched jobId",
+        "6. Assemble pipeline view"
+      ],
+      "multiConnectorNote": "One invoice can generate multiple jobs if enterprise has multiple connectors (Zwing→ERP and Zwing→CRM). Show all.",
+      "apiEndpoints": [
+        "GET /api/dashboard/trace?invoiceId=&ssoEnterpriseId= (ssoEnterpriseId optional if GIP has the refDocNo)"
+      ]
+    }
+  },
+  {
+    "id": "STORY-008",
+    "title": "Per-App Delivery Health (Inbound App Perspective)",
+    "epic": "GIP Job Delivery Monitoring",
+    "priority": "P1",
+    "status": "pending",
+    "description": "As an ops engineer, I want to see delivery health from the perspective of each downstream app (ERP, CRM, MSG91, SSO) across all enterprises so I can identify if a specific app is the common point of failure.",
+    "userStory": "As an ops engineer, I want to see how many jobs targeted at the ERP are failing across all enterprises so I can determine if the issue is the app itself versus a specific enterprise's integration.",
+    "acceptanceCriteria": [
+      "List all apps from GIP `apps` collection (name, refId, isEnabled)",
+      "For each app (as inbound app), show: total jobs targeted in date range, success, failed, pending, failure rate %",
+      "Cross-enterprise breakdown: for each app, show per-enterprise job health",
+      "Show connector list per app across all enterprises (connector name, enterprise name, isEnabled)",
+      "Filter by: date range, app, enterprise",
+      "Highlight apps with failure rate > threshold in RED",
+      "Sort by failure rate descending"
+    ],
+    "technicalDetails": {
+      "dataSources": {
+        "dipJobs": {
+          "collection": "dipJobs",
+          "groupBy": ["inboundAppId", "ssoEnterpriseId"],
+          "dateFilter": "transactionDate",
+          "metrics": "count by status"
+        },
+        "apps": {
+          "collection": "apps",
+          "fields": ["_id", "name", "refId", "isEnabled", "inboundEnabled", "outboundEnabled"]
+        },
+        "connectors": {
+          "collection": "connectors",
+          "groupBy": "inboundAppId",
+          "fields": ["_id", "name", "ssoEnterpriseId", "isEnabled", "inboundAppId", "outboundAppId"]
+        }
+      },
+      "apiEndpoints": [
+        "GET /api/dashboard/apps?from=&to=",
+        "GET /api/dashboard/apps/:appId/health?from=&to="
+      ]
+    }
+  },
+  {
+    "id": "STORY-009",
+    "title": "Event Type Health Matrix (Across Enterprises & Apps)",
+    "epic": "GIP Job Delivery Monitoring",
+    "priority": "P1",
+    "status": "pending",
+    "description": "As an ops engineer, I want to see a health matrix of all event types (invoice.share, return.invoice, etc.) across all enterprises and connectors so I can spot if a specific event type is systematically failing.",
+    "userStory": "As an ops engineer, I want to know if the 'zwing.invoice.share.v1' event is failing only for one enterprise or across all of them, so I can distinguish a data issue from a systemic platform bug.",
+    "acceptanceCriteria": [
+      "Matrix view: rows = event types (eventCode), columns = enterprises (or apps), cells = failure rate with color coding (GREEN/YELLOW/RED)",
+      "Alternatively, list view: event name, eventCode, total jobs, success, failed, failure rate, affected enterprises count",
+      "Clicking a cell or event row shows filtered failed jobs list for that event + enterprise combination",
+      "Filter by: date range, app (filter events by appId), direction (inbound/outbound)",
+      "Event types sourced from `events` collection, grouped by eventCode and appId",
+      "Show Kafka topic name per event (listenerConfig.kafkaTopicName) for Debezium correlation"
+    ],
+    "technicalDetails": {
+      "dataSources": {
+        "dipJobs": {
+          "aggregation": "Group by connectorAppEventId, ssoEnterpriseId, status. Lookup connectorEventMappings → events to get eventCode."
+        },
+        "events": {
+          "collection": "events",
+          "fields": ["_id", "name", "eventCode", "direction", "appId", "listenerConfig.kafkaTopicName"]
+        }
+      },
+      "apiEndpoints": [
+        "GET /api/dashboard/events/health-matrix?from=&to=&appId=",
+        "GET /api/dashboard/events/:eventId/jobs?from=&to=&ssoEnterpriseId="
+      ]
+    }
+  },
+  {
+    "id": "STORY-010",
+    "title": "Retry Management for Failed Jobs",
+    "epic": "GIP Job Delivery Monitoring",
+    "priority": "P1",
+    "status": "pending",
+    "description": "As an ops engineer, I want to manually trigger retries for failed GIP jobs (individually or in bulk) so I can recover missed deliveries without engineering intervention.",
+    "userStory": "As an ops engineer, I want to select one or more failed jobs and click 'Retry' so that GIP reprocesses them and delivers the events to the downstream app.",
+    "acceptanceCriteria": [
+      "Single job retry: available on Job Detail view (STORY-006) with confirmation dialog showing job summary",
+      "Bulk retry: available on Failed Jobs List (STORY-005) after selecting multiple jobs; only retryable jobs (isRetryable=true) can be selected for retry",
+      "Retry by filter: allow retry of all failed jobs matching current filter (enterprise + connector + event type + date range) with count confirmation before execution",
+      "On retry: system resets job status to 'pending' and enqueues for reprocessing via GIP's retry mechanism",
+      "Show retry progress: toast notification with count of jobs submitted for retry",
+      "After retry, jobs list refreshes and shows updated statuses",
+      "Retry audit log: show who triggered retry, when, how many jobs (stored in a meta field or separate audit collection)",
+      "Non-retryable jobs (isRetryable=false) show disabled retry button with tooltip explaining why"
+    ],
+    "technicalDetails": {
+      "retryMechanism": "Trigger GIP's existing retry API or directly update dipJobs status to 'pending' and reset retryCount if within allowed max retries. Confirm with GIP team which endpoint handles retry re-enqueue.",
+      "apiEndpoints": [
+        "POST /api/dashboard/jobs/retry (body: { jobIds: string[] })",
+        "POST /api/dashboard/jobs/retry-by-filter (body: { ssoEnterpriseId, connectorId, from, to, eventId })"
+      ],
+      "validation": [
+        "Only retry jobs with status='failed' and isRetryable=true",
+        "Enforce max batch size of 500 jobs per retry operation",
+        "Rate limit retry API to prevent abuse"
+      ]
+    }
+  },
+  {
+    "id": "STORY-011",
+    "title": "Global Cross-Enterprise Summary (Operations Command Center)",
+    "epic": "Enterprise & Integration Health",
+    "priority": "P1",
+    "status": "pending",
+    "description": "As an ops manager, I want a single command-center view showing key health metrics across ALL enterprises simultaneously — total events today, overall sync rate, total failures — so I can monitor platform health at a glance.",
+    "userStory": "As an ops manager, I want a high-level summary page showing platform-wide metrics so I can detect widespread issues (like a global Debezium outage) immediately.",
+    "acceptanceCriteria": [
+      "Top KPI cards: Total Enterprises Active, Total Zwing Invoices Today, Total GIP Jobs Today, Overall Success Rate %, Total Failed Jobs Today, Sync Gap (invoices without GIP event)",
+      "Bar chart: top 10 enterprises by job volume in selected date range",
+      "Bar chart: top 10 enterprises by failure count",
+      "Line chart: platform-wide job volume and failure rate over time (hourly)",
+      "App health summary row: for each app (ERP, CRM, MSG91, SSO), show failure rate pill",
+      "Alert banner: if any enterprise has sync gap > 10 or failure rate > 20%, show prominent alert",
+      "Date range filter applies to all widgets",
+      "Auto-refresh every 2 minutes"
+    ],
+    "technicalDetails": {
+      "dataSources": {
+        "dipJobs": "Aggregate across all ssoEnterpriseIds, group by status and transactionDate",
+        "enterprises": "Count of active enterprises",
+        "zwing": "Sum of invoice counts across all tenant DBs — expensive query; run as scheduled job (every 15 min) and cache result"
+      },
+      "cachingStrategy": "Cache aggregated metrics in Redis or MongoDB summary collection. Background job computes and stores metrics every 5 minutes. Dashboard reads from cache, not live queries.",
+      "apiEndpoints": [
+        "GET /api/dashboard/summary?from=&to=",
+        "GET /api/dashboard/summary/timeseries?from=&to=&bucket=1h"
+      ]
+    }
+  },
+  {
+    "id": "STORY-012",
+    "title": "Debezium Connector Status Monitor",
+    "epic": "Debezium Sync Monitoring",
+    "priority": "P1",
+    "status": "pending",
+    "description": "As an ops engineer, I want to see the status of Debezium connectors per enterprise and Kafka topic so I can know if a connector is broken, lagging, or stopped emitting events.",
+    "userStory": "As an ops engineer, I want to see which Debezium connectors are active, which are broken, and how much lag each topic has so I can proactively fix connector failures before invoices are missed.",
+    "acceptanceCriteria": [
+      "List Kafka topics mapped to Zwing events (from events.listenerConfig.kafkaTopicName): e.g., invoices, gv_invoices",
+      "Per topic, show: last event timestamp received in GIP (from dipJobs.transactionDate or ingressEventLog), events received in last 1h/24h",
+      "Lag indicator: time since last event received per topic per enterprise — flag if > 15 minutes with no events (during business hours)",
+      "Show enterprise-topic matrix: which enterprise has which Kafka topics active",
+      "Note: actual Debezium connector status (Kafka Connect REST API) if accessible; otherwise infer from event flow gap",
+      "Alert: flag enterprises where Zwing invoice activity exists (recent updated_at in invoices table) but no corresponding GIP events in same window"
+    ],
+    "technicalDetails": {
+      "inferenceApproach": "Since direct Kafka Connect API access may not be available, infer Debezium health by: (1) check if any Zwing invoices were created in last N minutes for the enterprise, (2) check if any GIP events (dipJobs) were received for that enterprise+topic in same window. Gap = connector likely broken.",
+      "kafkaTopics": "Mapped from events collection: events.listenerConfig.kafkaTopicName. Key topics: 'invoices', 'gv_invoices'",
+      "apiEndpoints": [
+        "GET /api/dashboard/debezium/status?from=&to=",
+        "GET /api/dashboard/debezium/enterprises/:ssoEnterpriseId/lag"
+      ],
+      "zwingQuery": "SELECT MAX(created_at) as last_invoice_time FROM invoices (per tenant DB) to detect if Zwing is producing data"
+    }
+  },
+  {
+    "id": "STORY-013",
+    "title": "Dashboard Filters, URL State & Saved Views",
+    "epic": "Dashboard UX",
+    "priority": "P2",
+    "status": "pending",
+    "description": "As a dashboard user, I want all filter selections (date range, enterprise, app, event type, status) to be persisted in the URL so I can share links to specific filtered views with teammates.",
+    "userStory": "As an ops engineer, I want to set my preferred filters and bookmark the URL so that every time I open the dashboard I see the same filtered view I care about, and I can share the exact view with teammates.",
+    "acceptanceCriteria": [
+      "All active filters reflected in URL query parameters: from, to, ssoEnterpriseId, connectorId, appId, eventId, status, page",
+      "Filter state restored from URL on page load",
+      "Global date range selector with presets: Last 1 Hour, Last 6 Hours, Last 24 Hours, Last 7 Days, Last 30 Days, Custom Range",
+      "Enterprise multi-select filter (typeahead search by name/baCode)",
+      "App multi-select filter",
+      "Status filter: All, Success, Failed, Pending, Processing",
+      "Clear All Filters button resets to defaults",
+      "Filter panel collapsible to maximize table area",
+      "Active filter chips shown below filter panel for quick review"
+    ],
+    "technicalDetails": {
+      "implementation": "Use URL search params (URLSearchParams API or React Router). Encode multi-select as repeated params or comma-separated.",
+      "dateEncoding": "ISO 8601 UTC strings in URL (e.g., ?from=2026-03-24T00:00:00Z&to=2026-03-24T23:59:59Z)",
+      "frameworkNote": "If React: use useSearchParams or react-router. If Next.js: use router.query with shallow routing."
+    }
+  },
+  {
+    "id": "STORY-014",
+    "title": "Backend API Layer — Core Data Service",
+    "epic": "Backend Infrastructure",
+    "priority": "P0",
+    "status": "pending",
+    "description": "Build the backend API service that powers the dashboard, connecting to both GIP MongoDB and Zwing MySQL, and exposing REST endpoints for all dashboard stories.",
+    "userStory": "As a developer, I want a well-structured backend API that efficiently queries GIP MongoDB and Zwing MySQL so that the dashboard frontend has reliable, performant data endpoints.",
+    "acceptanceCriteria": [
+      "REST API server (Node.js/Express or equivalent) with structured route organization by domain: /enterprises, /jobs, /apps, /events, /debezium, /trace",
+      "MongoDB connection to GIP database with connection pooling (Mongoose or native driver)",
+      "MySQL connection pool for Zwing master DB (vendor table) and dynamic per-enterprise tenant DB switching using db_name from vendor table",
+      "All list endpoints support pagination (page, limit params, max 200), sorting (sortBy, sortOrder), and date range filtering (from, to as ISO timestamps)",
+      "All endpoints return consistent response envelope: { success: bool, data: any, meta: { total, page, limit, from, to } }",
+      "Request validation with 400 errors for missing/invalid params",
+      "Error handling middleware returning structured errors",
+      "Authentication: internal auth (API key or JWT from internal SSO) — all endpoints require authentication",
+      "Health check endpoint: GET /health returning DB connectivity status for both MySQL and MongoDB",
+      "API documentation (Swagger/OpenAPI) auto-generated or manually written"
+    ],
+    "technicalDetails": {
+      "recommendedStack": "Node.js with Express or Fastify; Mongoose for MongoDB; mysql2 with connection pool for MySQL; Redis for caching",
+      "mysqlMultiTenantStrategy": "Maintain a connection pool per db_name, lazily initialized. Vendor table queried first to resolve db_name from ssoEnterpriseId. Cache db_name→enterprise mapping in memory (invalidate every 10 min).",
+      "mongoIndexesRequired": [
+        "dipJobs: { ssoEnterpriseId: 1, transactionDate: -1 }",
+        "dipJobs: { refDocNo: 1, ssoEnterpriseId: 1 }",
+        "dipJobs: { connectorId: 1, status: 1, transactionDate: -1 }",
+        "dipJobs: { status: 1, transactionDate: -1 }",
+        "dipJobTasks: { jobId: 1 }",
+        "connectors: { ssoEnterpriseId: 1 }",
+        "connectorEventMappings: { connectorId: 1 }"
+      ],
+      "mysqlIndexesRequired": [
+        "invoices: created_at (already likely indexed)",
+        "vendor: sso_enterprise_id (verify index exists)"
+      ],
+      "caching": "Redis with TTL-based caching for: enterprise list (5 min), per-enterprise connector list (5 min), aggregated summaries (2 min), reconciliation results (15 min)"
+    }
+  },
+  {
+    "id": "STORY-015",
+    "title": "Frontend Dashboard Application (SPA Shell)",
+    "epic": "Frontend Infrastructure",
+    "priority": "P0",
+    "status": "pending",
+    "description": "Build the frontend single-page application shell for the dashboard with routing, layout, navigation, and authentication.",
+    "userStory": "As a dashboard user, I want a fast, navigable web application with a consistent layout and sidebar navigation so I can move between different views without losing context.",
+    "acceptanceCriteria": [
+      "React (or Next.js) SPA with TypeScript",
+      "Sidebar navigation: Global Summary, Enterprises, Jobs (Failed), Apps, Events, Transaction Trace",
+      "Top bar: environment indicator (prod/staging), logged-in user, global date range selector",
+      "Authentication: integrate with internal SSO/Okta; redirect to login if unauthenticated",
+      "Responsive layout (desktop primary; mobile read-only acceptable)",
+      "Loading states, empty states, and error states for all data views",
+      "Toast notification system for retry actions and async operations",
+      "Dark mode optional but consistent design system (Ant Design, MUI, or Tailwind + shadcn/ui recommended)",
+      "Route structure: /, /enterprises, /enterprises/:ssoEnterpriseId, /enterprises/:ssoEnterpriseId/sync-gap, /jobs, /jobs/:jobId, /apps, /events, /trace"
+    ],
+    "technicalDetails": {
+      "recommendedStack": "Next.js 14+ (App Router) with TypeScript; TanStack Query for data fetching and caching; shadcn/ui + Tailwind CSS; Recharts or Chart.js for charts; React Table (TanStack Table) for data tables",
+      "stateManagement": "TanStack Query for server state; URL params for filter state; minimal client-side state (Zustand if needed)",
+      "buildAndDeploy": "Docker container; environment variables for API base URL and auth config"
+    }
+  },
+  {
+    "id": "STORY-016",
+    "title": "Sync Gap Scheduled Reconciliation Job",
+    "epic": "Debezium Sync Monitoring",
+    "priority": "P2",
+    "status": "pending",
+    "description": "Build a background scheduled job that runs reconciliation between Zwing invoices and GIP events at regular intervals and stores results, so the dashboard can show near-real-time sync gap without expensive on-demand queries.",
+    "userStory": "As an ops engineer, I want the sync gap to be pre-computed every 15 minutes so the dashboard loads fast and I always have a recent view of missed events without waiting for a slow cross-DB query.",
+    "acceptanceCriteria": [
+      "Scheduled job runs every 15 minutes (cron)",
+      "For each active enterprise: query Zwing invoice count for last 1 hour and last 24 hours; query GIP dipJobs refDocNo count for same windows; compute and store gap",
+      "Results stored in a dedicated MongoDB collection 'syncGapSnapshots': { ssoEnterpriseId, computedAt, window: '1h'|'24h', zwingCount, gipCount, gap, missedInvoiceIds: [] }",
+      "Dashboard reads from syncGapSnapshots for fast display; on-demand re-reconcile available but rate-limited",
+      "Job reports its own run status (success/fail/lastRunAt) in a 'jobRuns' collection",
+      "Alert if gap > 0 for any enterprise for more than 30 minutes consecutively (write to alerts collection)",
+      "Job skips enterprises with liveStatus != 1 or no Zwing db_name configured"
+    ],
+    "technicalDetails": {
+      "scheduler": "Node.js cron job (node-cron) or dedicated queue worker (BullMQ). If containerized, run as separate service.",
+      "concurrency": "Process enterprises in parallel batches of 5 to avoid overwhelming MySQL",
+      "missedInvoiceIds": "For the gap list, store max 1000 invoice_ids per snapshot. For larger gaps, store count only and fetch live on demand.",
+      "mongoCollection": "syncGapSnapshots with TTL index on computedAt (expire after 7 days)"
+    }
+  }
+]
