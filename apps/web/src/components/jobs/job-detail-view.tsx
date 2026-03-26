@@ -1,16 +1,15 @@
 'use client';
 
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
-import { getJobDetail, retryJobs } from '@/lib/api-client';
-import { formatDate, statusColor, cn } from '@/lib/utils';
+import { getJobDetail } from '@/lib/api-client';
+import { formatDate, cn } from '@/lib/utils';
 import { PageLoader, ErrorState } from '@/components/ui/loading';
 import { Badge } from '@/components/ui/badge';
 import {
-  ArrowLeft, RefreshCw, CheckCircle2, XCircle, Clock, Loader2,
+  ArrowLeft, CheckCircle2, XCircle, Clock, Loader2,
   Filter, Globe, Wrench, ChevronRight,
 } from 'lucide-react';
-import { toast } from 'sonner';
 
 const statusVariantMap: Record<string, 'success' | 'danger' | 'warning' | 'info'> = {
   success: 'success',
@@ -39,20 +38,10 @@ function StatusIcon({ status }: { status: string }) {
 
 export function JobDetailView({ jobId }: { jobId: string }) {
   const router = useRouter();
-  const qc = useQueryClient();
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ['job-detail', jobId],
     queryFn: () => getJobDetail(jobId),
-  });
-
-  const retryMutation = useMutation({
-    mutationFn: () => retryJobs([jobId]),
-    onSuccess: () => {
-      toast.success('Job queued for retry');
-      qc.invalidateQueries({ queryKey: ['job-detail', jobId] });
-    },
-    onError: () => toast.error('Retry failed'),
   });
 
   if (isLoading) return <PageLoader />;
@@ -100,16 +89,6 @@ export function JobDetailView({ jobId }: { jobId: string }) {
               </div>
             )}
           </div>
-          {job.isRetryable && job.status === 'failed' && (
-            <button
-              onClick={() => retryMutation.mutate()}
-              disabled={retryMutation.isPending}
-              className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50"
-            >
-              <RefreshCw className={cn('w-3.5 h-3.5', retryMutation.isPending && 'animate-spin')} />
-              Retry Job
-            </button>
-          )}
         </div>
       </div>
 
