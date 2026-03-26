@@ -2,14 +2,18 @@ import type { NextConfig } from 'next';
 
 const nextConfig: NextConfig = {
   // Proxy /api/* to the NestJS backend container in production.
-  // In dev, NEXT_PUBLIC_API_URL=http://localhost:3001 makes the browser call
-  // the API directly, so rewrites are never triggered.
+  // next.config.ts is evaluated at build time, so we use NODE_ENV (which Next.js
+  // always sets to "production" during `next build`) to bake in the correct
+  // Docker service hostname. In dev, no rewrites are needed because the browser
+  // calls the API directly via NEXT_PUBLIC_API_URL=http://localhost:3001.
   async rewrites() {
-    const apiBase = process.env.INTERNAL_API_URL || 'http://localhost:3001';
+    if (process.env.NODE_ENV !== 'production') {
+      return [];
+    }
     return [
       {
         source: '/api/:path*',
-        destination: `${apiBase}/api/:path*`,
+        destination: 'http://gip-api:3001/api/:path*',
       },
     ];
   },

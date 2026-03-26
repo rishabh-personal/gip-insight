@@ -24,9 +24,6 @@ services:
       - "4000:3000"
     environment:
       NODE_ENV: production
-      # Used by Next.js rewrites() at startup to proxy /api/* to the backend.
-      # Must use the service name (gip-api) for Docker DNS resolution.
-      INTERNAL_API_URL: http://gip-api:3001
     depends_on:
       - gip-api
     networks:

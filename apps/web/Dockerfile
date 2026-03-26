@@ -39,6 +39,5 @@ EXPOSE 3000
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
 
-# INTERNAL_API_URL is read by next.config.ts rewrites() at server start time
-# so it can be overridden via docker-compose environment without rebuilding.
+# Rewrites are baked in at build time via NODE_ENV=production check in next.config.ts.
 CMD ["npm", "run", "start", "--workspace=apps/web"]
