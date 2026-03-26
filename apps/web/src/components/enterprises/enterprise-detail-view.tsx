@@ -1,20 +1,19 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
-import { useSearchParams, useRouter } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { getEnterprise, getJobSummary } from '@/lib/api-client';
-import { getPresetRange, toIso, formatDate, statusColor, cn } from '@/lib/utils';
+import { useDateRange } from '@/hooks/use-date-range';
+import { cn } from '@/lib/utils';
 import { PageLoader, ErrorState, EmptyState } from '@/components/ui/loading';
 import { StatCard } from '@/components/ui/stat-card';
 import { Badge } from '@/components/ui/badge';
 import { ChevronRight, AlertCircle, Activity, ArrowLeft, GitBranch, Database } from 'lucide-react';
 
 export function EnterpriseDetailView({ ssoEnterpriseId }: { ssoEnterpriseId: string }) {
-  const searchParams = useSearchParams();
   const router = useRouter();
-  const from = searchParams.get('from') || toIso(getPresetRange('24h').from);
-  const to = searchParams.get('to') || toIso(new Date());
+  const { from, to } = useDateRange();
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ['enterprise-detail', ssoEnterpriseId, from, to],
@@ -76,16 +75,17 @@ export function EnterpriseDetailView({ ssoEnterpriseId }: { ssoEnterpriseId: str
         </div>
       </div>
 
-      {/* Job metrics */}
+      {/* Job metrics — all values are invoice-level, not raw job counts */}
       <div className="grid grid-cols-5 gap-4">
-        <StatCard label="Total Jobs" value={totals.total ?? 0} color="default" />
-        <StatCard label="Success" value={totals.success ?? 0} color="green" />
-        <StatCard label="Failed" value={totals.failed ?? 0} color={totals.failed > 0 ? 'red' : 'default'} />
-        <StatCard label="Pending" value={totals.pending ?? 0} color="yellow" />
+        <StatCard label="Zwing Invoices" value={totals.total ?? 0} color="default" sub="in selected window" />
+        <StatCard label="Succeeded" value={totals.success ?? 0} color="green" sub="delivered successfully" />
+        <StatCard label="Failed" value={totals.failed ?? 0} color={totals.failed > 0 ? 'red' : 'default'} sub="no success for any connector" />
+        <StatCard label="Not Captured" value={totals.pending ?? 0} color="yellow" sub="no GIP job found" />
         <StatCard
-          label="Failure Rate"
-          value={`${totals.failure_rate ?? 0}%`}
-          color={totals.failure_rate > 10 ? 'red' : totals.failure_rate >= 2 ? 'yellow' : 'green'}
+          label="Success Rate"
+          value={`${totals.success_rate ?? 0}%`}
+          color={(totals.success_rate ?? 0) >= 98 ? 'green' : (totals.success_rate ?? 0) >= 90 ? 'yellow' : 'red'}
+          sub="invoices delivered"
         />
       </div>
 
@@ -144,9 +144,14 @@ function ConnectorCard({ connector: c, onViewJobs }: { connector: any; onViewJob
             </p>
           </div>
           <div className="text-center">
-            <p className="text-xs text-gray-400">Fail %</p>
-            <p className={cn('font-semibold text-sm', m.failure_rate > 10 ? 'text-red-600' : m.failure_rate >= 2 ? 'text-yellow-600' : 'text-gray-500')}>
-              {m.failure_rate ?? 0}%
+            <p className="text-xs text-gray-400">Success %</p>
+            <p className={cn(
+              'font-semibold text-sm',
+              (m.success_rate ?? 0) >= 98 ? 'text-green-600' :
+              (m.success_rate ?? 0) >= 90 ? 'text-yellow-600' :
+              'text-red-600',
+            )}>
+              {m.success_rate ?? 0}%
             </p>
           </div>
           {m.failed > 0 && (

@@ -9,6 +9,7 @@ import { ConnectorEventMapping, ConnectorEventMappingSchema } from '../schemas/c
 import { AppCatalog, AppCatalogSchema } from '../schemas/app-catalog.schema';
 import { EventCatalog, EventCatalogSchema } from '../schemas/event-catalog.schema';
 import { Enterprise, EnterpriseSchema } from '../schemas/enterprise.schema';
+import { CommonModule } from '../common/common.module';
 
 @Module({
   imports: [
@@ -21,6 +22,7 @@ import { Enterprise, EnterpriseSchema } from '../schemas/enterprise.schema';
       { name: EventCatalog.name, schema: EventCatalogSchema },
       { name: Enterprise.name, schema: EnterpriseSchema },
     ]),
+    CommonModule,
   ],
   controllers: [DipJobsController],
   providers: [DipJobsService],

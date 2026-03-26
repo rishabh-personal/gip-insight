@@ -39,7 +39,6 @@ export class DipJobsController {
     @Query() pagination: PaginationDto,
     @Query('ssoEnterpriseId') ssoEnterpriseId?: string,
     @Query('connectorId') connectorId?: string,
-    @Query('appId') appId?: string,
   ) {
     return this.svc.getFailedJobs({
       page: pagination.page,
@@ -48,7 +47,6 @@ export class DipJobsController {
       to: pagination.toDate,
       ssoEnterpriseId,
       connectorId,
-      appId,
     });
   }
 

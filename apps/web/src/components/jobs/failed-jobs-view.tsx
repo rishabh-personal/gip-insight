@@ -3,7 +3,8 @@
 import { useQuery } from '@tanstack/react-query';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { getEnterprises, getEnterpriseFailedSummary, getFailedJobs } from '@/lib/api-client';
-import { getPresetRange, toIso, formatDate, cn } from '@/lib/utils';
+import { useDateRange } from '@/hooks/use-date-range';
+import { formatDate, cn } from '@/lib/utils';
 import { PageLoader, ErrorState, EmptyState } from '@/components/ui/loading';
 import { AlertCircle, ChevronRight, ChevronLeft, ArrowLeft, RefreshCw } from 'lucide-react';
 import { useState } from 'react';
@@ -123,12 +124,14 @@ function EnterpriseFailedRow({
 
 function EnterpriseJobList({
   ssoEnterpriseId,
+  connectorId,
   tradeName,
   from,
   to,
   onBack,
 }: {
   ssoEnterpriseId: string;
+  connectorId?: string;
   tradeName: string;
   from: string;
   to: string;
@@ -138,8 +141,8 @@ function EnterpriseJobList({
   const [page, setPage] = useState(1);
 
   const { data, isLoading, isError, refetch } = useQuery({
-    queryKey: ['failed-jobs', ssoEnterpriseId, from, to, page],
-    queryFn: () => getFailedJobs({ from, to, ssoEnterpriseId, page, limit: 50 }),
+    queryKey: ['failed-jobs', ssoEnterpriseId, connectorId, from, to, page],
+    queryFn: () => getFailedJobs({ from, to, ssoEnterpriseId, connectorId, page, limit: 50 }),
     staleTime: 60_000,
   });
 
@@ -159,6 +162,11 @@ function EnterpriseJobList({
           </button>
           <span className="text-gray-300">|</span>
           <h3 className="text-sm font-semibold text-gray-900">{tradeName}</h3>
+          {connectorId && (
+            <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-50 text-indigo-600 border border-indigo-100">
+              connector filter active
+            </span>
+          )}
           {meta.total > 0 && (
             <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-red-50 text-red-600 border border-red-100">
               {meta.total} failed
@@ -188,7 +196,7 @@ function EnterpriseJobList({
                 <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Connector</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Event</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Error</th>
-                <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Retries</th>
+                <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Attempts</th>
                 <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Date</th>
                 <th className="w-16"></th>
               </tr>
@@ -214,7 +222,12 @@ function EnterpriseJobList({
                     <p className="text-xs text-red-600 truncate" title={job.error}>{job.error || '—'}</p>
                   </td>
                   <td className="px-4 py-3 text-right">
-                    <span className="text-xs text-gray-500">{job.retryCount ?? 0}</span>
+                    <span className={cn(
+                      'text-xs font-medium',
+                      (job.failedAttempts ?? 1) > 1 ? 'text-orange-500' : 'text-gray-400',
+                    )}>
+                      {job.failedAttempts ?? 1}
+                    </span>
                   </td>
                   <td className="px-4 py-3">
                     <span className="text-xs text-gray-500">{formatDate(job.transactionDate)}</span>
@@ -258,35 +271,70 @@ function EnterpriseJobList({
 
 export function FailedJobsView() {
   const searchParams = useSearchParams();
-  const [selectedEnterprise, setSelectedEnterprise] = useState<{ ssoEnterpriseId: string; tradeName: string } | null>(null);
+  const router = useRouter();
+
+  // If navigated here with a specific enterprise (e.g. from connector "View Failures"),
+  // skip the enterprise list and go straight to the job list.
+  const urlEnterpriseId = searchParams.get('ssoEnterpriseId') || '';
+  const urlConnectorId  = searchParams.get('connectorId') || '';
+
+  const [selectedEnterprise, setSelectedEnterprise] = useState<{
+    ssoEnterpriseId: string;
+    connectorId?: string;
+    tradeName: string;
+  } | null>(
+    urlEnterpriseId
+      ? { ssoEnterpriseId: urlEnterpriseId, connectorId: urlConnectorId || undefined, tradeName: urlEnterpriseId }
+      : null,
+  );
   const [search, setSearch] = useState('');
 
-  const from = searchParams.get('from') || toIso(getPresetRange('24h').from);
-  const to = searchParams.get('to') || toIso(new Date());
+  const { from, to } = useDateRange();
+
+  // Resolve trade name from stubs once loaded (replaces the raw ID in the header).
+  // Derived in render rather than stored in state to avoid setState-during-render.
+  const { data: stubsData } = useQuery({
+    queryKey: ['enterprise-stubs'],
+    queryFn: () => getEnterprises({}),
+    staleTime: 30_000,
+    enabled: !!urlEnterpriseId, // only needed for name resolution when deep-linked
+  });
+  const resolvedTradeName: string =
+    stubsData?.data?.find((e: any) => e.ssoEnterpriseId === urlEnterpriseId)?.tradeName
+    ?? selectedEnterprise?.tradeName
+    ?? urlEnterpriseId;
 
   // 1️⃣ Fast: load enterprise stubs (same as enterprise page — uses cache if already visited)
   const { data, isLoading, isError } = useQuery({
     queryKey: ['enterprise-stubs', search],
     queryFn: () => getEnterprises({ search: search || undefined }),
     staleTime: 30_000,
+    enabled: !selectedEnterprise, // skip while in drill-down
   });
 
   const enterprises = data?.data || [];
 
-  // Drill-down: show jobs for a selected enterprise
+  const handleBack = () => {
+    setSelectedEnterprise(null);
+    // Clear URL params so back-navigation shows enterprise list cleanly
+    router.push('/jobs');
+  };
+
+  // Drill-down: show jobs for a selected enterprise (+ optional connector filter)
   if (selectedEnterprise) {
     return (
       <div className="space-y-6">
         <div>
           <h2 className="text-xl font-semibold text-gray-900">Failed Jobs</h2>
-          <p className="text-sm text-gray-500 mt-1">Drill-down view for selected enterprise</p>
+          <p className="text-sm text-gray-500 mt-1">Filtered view</p>
         </div>
         <EnterpriseJobList
           ssoEnterpriseId={selectedEnterprise.ssoEnterpriseId}
-          tradeName={selectedEnterprise.tradeName}
+          connectorId={selectedEnterprise.connectorId}
+          tradeName={resolvedTradeName}
           from={from}
           to={to}
-          onBack={() => setSelectedEnterprise(null)}
+          onBack={handleBack}
         />
       </div>
     );
@@ -345,7 +393,7 @@ export function FailedJobsView() {
                   enterprise={e}
                   from={from}
                   to={to}
-                  onClick={() => setSelectedEnterprise({ ssoEnterpriseId: e.ssoEnterpriseId, tradeName: e.tradeName })}
+                  onClick={() => setSelectedEnterprise({ ssoEnterpriseId: e.ssoEnterpriseId, tradeName: e.tradeName, connectorId: undefined })}
                 />
               ))}
             </tbody>

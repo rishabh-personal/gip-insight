@@ -5,7 +5,6 @@
 import { Client } from 'ssh2';
 import * as net from 'net';
 import * as fs from 'fs';
-import { promises as dns } from 'dns';
 
 interface SshConfig {
   host: string;
