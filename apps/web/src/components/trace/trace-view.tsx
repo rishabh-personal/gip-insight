@@ -4,11 +4,11 @@ import { useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { traceInvoice } from '@/lib/api-client';
-import { formatDate, statusColor, cn } from '@/lib/utils';
+import { formatDate, cn } from '@/lib/utils';
 import { PageLoader, EmptyState } from '@/components/ui/loading';
 import { Badge } from '@/components/ui/badge';
 import {
-  Search, CheckCircle2, XCircle, AlertTriangle, Clock, ChevronRight,
+  Search, CheckCircle2, XCircle, AlertTriangle, Clock,
   Database, Zap, Package,
 } from 'lucide-react';
 

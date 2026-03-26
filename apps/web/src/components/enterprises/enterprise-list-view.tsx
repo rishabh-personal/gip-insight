@@ -1,9 +1,8 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
-import { useSearchParams, useRouter } from 'next/navigation';
 import { getEnterprises, getEnterpriseApps } from '@/lib/api-client';
-import { getPresetRange, toIso } from '@/lib/utils';
+import { useDateRange } from '@/hooks/use-date-range';
 import { PageLoader, ErrorState, EmptyState } from '@/components/ui/loading';
 import { StatCard } from '@/components/ui/stat-card';
 import { EnterpriseTable } from './enterprise-table';
@@ -11,13 +10,10 @@ import { Building2, Layers, Search, X } from 'lucide-react';
 import { useState, useMemo } from 'react';
 
 export function EnterpriseListView() {
-  const searchParams = useSearchParams();
-  const router = useRouter();
   const [search, setSearch] = useState('');
   const [selectedAppName, setSelectedAppName] = useState<string>('');
 
-  const from = searchParams.get('from') || toIso(getPresetRange('24h').from);
-  const to = searchParams.get('to') || toIso(new Date());
+  const { from, to } = useDateRange();
 
   // 1️⃣ Fast: load enterprise stubs (apps-based, no metrics)
   const { data, isLoading, isError, error } = useQuery({

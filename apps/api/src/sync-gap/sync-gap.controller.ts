@@ -1,4 +1,4 @@
-import { Controller, Get, Param, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
 import { ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { SyncGapService } from './sync-gap.service';
 import { PaginationDto } from '../common/dto/pagination.dto';
@@ -7,6 +7,16 @@ import { PaginationDto } from '../common/dto/pagination.dto';
 @Controller('api/dashboard/enterprises/:ssoEnterpriseId/sync-gap')
 export class SyncGapController {
   constructor(private readonly svc: SyncGapService) {}
+
+  @Post('retrigger')
+  @ApiOperation({ summary: 'Set sync_status=5 on selected invoices to re-emit Debezium events — batches of 1000' })
+  async retrigger(
+    @Param('ssoEnterpriseId') ssoEnterpriseId: string,
+    @Body() body: { invoiceIds: string[] },
+  ) {
+    const result = await this.svc.retriggerInvoices(ssoEnterpriseId, body.invoiceIds);
+    return { data: result };
+  }
 
   @Get()
   @ApiOperation({ summary: 'Zwing vs GIP reconciliation — detect missed Debezium events (STORY-003)' })

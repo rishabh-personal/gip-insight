@@ -4,6 +4,7 @@ import { Model } from 'mongoose';
 import { DipJob } from '../schemas/dip-job.schema';
 import { Enterprise } from '../schemas/enterprise.schema';
 import { MysqlTenantService } from '../database/mysql-tenant.service';
+import { errMsg } from '../common/zwing-status.service';
 
 @Injectable()
 export class SyncGapService {
@@ -14,6 +15,47 @@ export class SyncGapService {
     @InjectModel(Enterprise.name) private enterpriseModel: Model<Enterprise>,
     private readonly mysql: MysqlTenantService,
   ) {}
+
+  /**
+   * Increments sync_status by 1 on the given invoice IDs in the enterprise's Zwing DB.
+   * This causes Debezium to pick up the row change and re-emit the event to Kafka.
+   * Runs in batches of 1000 to avoid hitting MySQL's IN() limit.
+   */
+  async retriggerInvoices(
+    ssoEnterpriseId: string,
+    invoiceIds: string[],
+  ): Promise<{ updated: number; batches: number }> {
+    if (!invoiceIds.length) return { updated: 0, batches: 0 };
+
+    const vendors = await this.mysql.query(
+      this.mysql.getMasterDb(),
+      `SELECT db_name FROM vendor WHERE sso_enterprise_id = ? AND deleted = 0 LIMIT 1`,
+      [ssoEnterpriseId],
+    );
+    const vendor = vendors[0] as any;
+    if (!vendor?.db_name) throw new Error('No Zwing db_name for this enterprise');
+
+    const BATCH = 1000;
+    let updated = 0;
+    let batches = 0;
+
+    for (let i = 0; i < invoiceIds.length; i += BATCH) {
+      const chunk = invoiceIds.slice(i, i + BATCH);
+      const placeholders = chunk.map(() => '?').join(',');
+      const result = await this.mysql.query(
+        vendor.db_name,
+        `UPDATE invoices SET sync_status = sync_status + 1 WHERE invoice_id IN (${placeholders})`,
+        chunk,
+      );
+      updated += (result as any).affectedRows ?? chunk.length;
+      batches += 1;
+      this.logger.log(
+        `[Retrigger] ${ssoEnterpriseId} batch ${batches}: ${chunk.length} invoices → sync_status+1`,
+      );
+    }
+
+    return { updated, batches };
+  }
 
   async getSyncGap(
     ssoEnterpriseId: string,
@@ -63,7 +105,7 @@ export class SyncGapService {
          FROM invoices WHERE ${invoiceWhere}`,
         invoiceParams,
       ).catch((e) => {
-        this.logger.warn(`Zwing query failed: ${e.message}`);
+        this.logger.warn(`Zwing query failed: ${errMsg(e)}`);
         return [] as any[];
       }),
       this.jobModel
@@ -76,8 +118,6 @@ export class SyncGapService {
     ]);
 
     const gipSet = new Set(gipJobRows.map((j) => j.refDocNo));
-    const zwingIds = new Set((zwingRows as any[]).map((r) => r.invoice_id));
-
     const missedEvents = (zwingRows as any[]).filter((r) => !gipSet.has(r.invoice_id));
 
     return {

@@ -1,0 +1,37 @@
+services:
+  gip-api:
+    image: rishabhpersonal/gip-insight-api:latest
+    container_name: gip-insight-api
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    volumes:
+      # SSH private key used to tunnel into the jump host (jh.ginesys.one).
+      # Place the key at /opt/gip-insight/tunnel_key on the droplet (chmod 600).
+      - /opt/gip-insight/tunnel_key:/run/secrets/tunnel_key:ro
+    env_file:
+      # /opt/gip-insight/.env on the droplet — never committed to git.
+      # See .env.production.example for the required variables.
+      - .env
+    networks:
+      - gip-network
+
+  gip-web:
+    image: rishabhpersonal/gip-insight-web:latest
+    container_name: gip-insight-web
+    restart: unless-stopped
+    ports:
+      - "4000:3000"
+    environment:
+      NODE_ENV: production
+      # Used by Next.js rewrites() at startup to proxy /api/* to the backend.
+      # Must use the service name (gip-api) for Docker DNS resolution.
+      INTERNAL_API_URL: http://gip-api:3001
+    depends_on:
+      - gip-api
+    networks:
+      - gip-network
+
+networks:
+  gip-network:
+    name: gip-insight-network

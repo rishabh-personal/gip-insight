@@ -6,30 +6,28 @@ import { Connector } from '../schemas/connector.schema';
 import { ConnectorEventMapping } from '../schemas/connector-event-mapping.schema';
 import { AppCatalog } from '../schemas/app-catalog.schema';
 import { EventCatalog } from '../schemas/event-catalog.schema';
-import { DipJob } from '../schemas/dip-job.schema';
 import { MysqlTenantService } from '../database/mysql-tenant.service';
+import { ZwingStatusService, errMsg } from '../common/zwing-status.service';
 
 @Injectable()
 export class EnterprisesService {
   private readonly logger = new Logger(EnterprisesService.name);
 
   constructor(
-    @InjectModel(Enterprise.name) private enterpriseModel: Model<Enterprise>,
-    @InjectModel(Connector.name) private connectorModel: Model<Connector>,
-    @InjectModel(ConnectorEventMapping.name) private cemModel: Model<ConnectorEventMapping>,
-    @InjectModel(AppCatalog.name) private appModel: Model<AppCatalog>,
-    @InjectModel(EventCatalog.name) private eventModel: Model<EventCatalog>,
-    @InjectModel(DipJob.name) private dipJobModel: Model<DipJob>,
+    @InjectModel(Enterprise.name) private readonly enterpriseModel: Model<Enterprise>,
+    @InjectModel(Connector.name) private readonly connectorModel: Model<Connector>,
+    @InjectModel(ConnectorEventMapping.name) private readonly cemModel: Model<ConnectorEventMapping>,
+    @InjectModel(AppCatalog.name) private readonly appModel: Model<AppCatalog>,
+    @InjectModel(EventCatalog.name) private readonly eventModel: Model<EventCatalog>,
     private readonly mysql: MysqlTenantService,
+    private readonly zwingStatus: ZwingStatusService,
   ) {}
 
   /**
    * Returns enterprises that have at least one active private app in the apps collection.
-   * Private apps (accessType:'private') are enterprise-owned and carry ssoEnterpriseId.
    * Lightweight — no metrics, no MySQL queries. Fast first render.
    */
   async listEnterpriseStubs(opts: { search?: string; appName?: string }): Promise<any> {
-    // Query apps that belong to an enterprise (private apps with ssoEnterpriseId)
     const appFilter: any = {
       ssoEnterpriseId: { $exists: true, $ne: null },
       deletedOn: null,
@@ -44,7 +42,6 @@ export class EnterprisesService {
 
     if (!enterpriseApps.length) return { data: [], meta: { total: 0 } };
 
-    // Group apps by enterprise
     const appsByEnterprise: Record<string, any[]> = {};
     for (const app of enterpriseApps) {
       const eid = app.ssoEnterpriseId;
@@ -86,18 +83,15 @@ export class EnterprisesService {
     return { data, meta: { total: data.length } };
   }
 
-  /**
-   * Returns distinct app names used as private apps (for the filter dropdown).
-   */
+  /** Returns distinct app names used as private apps (for the filter dropdown). */
   async listApps(): Promise<any> {
     const apps = await this.appModel
       .find(
         { ssoEnterpriseId: { $exists: true, $ne: null }, deletedOn: null },
-        { name: 1, accessType: 1 },
+        { name: 1 },
       )
       .lean();
 
-    // Deduplicate by name
     const seen = new Set<string>();
     const unique: any[] = [];
     for (const a of apps) {
@@ -112,65 +106,57 @@ export class EnterprisesService {
 
   /**
    * Metrics for a single enterprise — called async per row after list renders.
+   * Zwing MySQL is the source of truth; GIP MongoDB checked for each invoice.
    */
   async getEnterpriseMetrics(
     ssoEnterpriseId: string,
     from: Date,
     to: Date,
   ): Promise<any> {
-    const [jobAgg, vendorRows] = await Promise.all([
-      this.dipJobModel.aggregate([
-        {
-          $match: {
-            ssoEnterpriseId,
-            transactionDate: { $gte: from, $lte: to },
-          },
-        },
-        {
-          $group: {
-            _id: '$status',
-            count: { $sum: 1 },
-          },
-        },
-      ]),
-      this.getVendorRows([ssoEnterpriseId]),
-    ]);
+    const vendorRows = await this.getVendorRows([ssoEnterpriseId]);
+    const dbName = vendorRows[0]?.db_name ?? null;
 
-    const jobs: Record<string, number> = {};
-    for (const row of jobAgg) jobs[row._id] = row.count;
+    if (!dbName) {
+      return {
+        ssoEnterpriseId, health: 'red', dbName: null,
+        metrics: { zwing_invoices: null, succeeded: 0, failed: 0, missing: 0, success_rate: 0, failure_rate: 0, sync_gap: null },
+      };
+    }
 
-    const total_jobs = Object.values(jobs).reduce((a: number, b: number) => a + b, 0);
-    const failed = jobs['failed'] || 0;
-    const success = jobs['success'] || 0;
-    const pending = jobs['pending'] || 0;
-    const processing = jobs['processing'] || 0;
-    const failure_rate = total_jobs > 0 ? Math.round((failed / total_jobs) * 100 * 10) / 10 : 0;
+    const { invoiceIds, byInvoice } = await this.zwingStatus.buildZwingJobStatus(
+      ssoEnterpriseId, dbName, from, to,
+    );
 
-    const invoiceCounts = await this.batchInvoiceCounts(vendorRows, from, to);
-    const zwing_invoices = invoiceCounts[ssoEnterpriseId] ?? null;
-    const gip_events = total_jobs;
-    const sync_gap = zwing_invoices != null ? Math.max(0, zwing_invoices - gip_events) : null;
+    const zwing_invoices = invoiceIds.length;
+    let succeeded = 0, failed = 0, missing = 0;
+    for (const [, v] of byInvoice) {
+      if (v.hasSuccess)       succeeded++;
+      else if (v.hasAnyJob)   failed++;
+      else                    missing++;
+    }
+    const processed    = succeeded + failed;
+    const sync_gap     = missing;
+    const success_rate = zwing_invoices > 0
+      ? Math.round((succeeded / zwing_invoices) * 100 * 10) / 10 : 0;
+    const failure_rate = zwing_invoices > 0
+      ? Math.round((failed / zwing_invoices) * 100 * 10) / 10 : 0;
 
     const health =
-      (sync_gap != null && sync_gap > 0) || failure_rate > 10
-        ? 'red'
-        : failure_rate >= 2
-        ? 'yellow'
-        : 'green';
+      sync_gap > 0 || failure_rate > 10 ? 'red' :
+      failure_rate >= 2                 ? 'yellow' : 'green';
 
     return {
       ssoEnterpriseId,
       health,
-      dbName: vendorRows[0]?.db_name ?? null,
+      dbName,
       metrics: {
-        zwing_invoices,
-        gip_events,
-        sync_gap,
-        total_jobs,
-        success,
-        failed,
-        pending,
-        processing,
+        zwing_invoices, succeeded, failed, missing, processed, sync_gap,
+        success: succeeded,
+        total_jobs: processed,
+        gip_events: processed,
+        pending: 0,
+        processing: 0,
+        success_rate,
         failure_rate,
       },
     };
@@ -195,23 +181,9 @@ export class EnterprisesService {
       ]),
     ].filter(Boolean);
 
-    const [apps, cemList, jobAgg] = await Promise.all([
+    const [apps, cemList] = await Promise.all([
       this.appModel.find({ _id: { $in: appIds.map((id) => new Types.ObjectId(id)) } }).lean(),
       this.cemModel.find({ connectorId: { $in: connectorIds } }).lean(),
-      this.dipJobModel.aggregate([
-        {
-          $match: {
-            connectorId: { $in: connectorIds },
-            transactionDate: { $gte: from, $lte: to },
-          },
-        },
-        {
-          $group: {
-            _id: { connectorId: '$connectorId', status: '$status' },
-            count: { $sum: 1 },
-          },
-        },
-      ]),
     ]);
 
     const appMap: Record<string, any> = {};
@@ -230,18 +202,34 @@ export class EnterprisesService {
     const eventMap: Record<string, any> = {};
     for (const ev of events) eventMap[ev._id.toString()] = ev;
 
-    const jobMap: Record<string, Record<string, number>> = {};
-    for (const row of jobAgg) {
-      const cid = row._id.connectorId.toString();
-      if (!jobMap[cid]) jobMap[cid] = {};
-      jobMap[cid][row._id.status] = row.count;
+    const dbName = vendor?.db_name ?? null;
+    let byPair: Array<{ refDocNo: string; connectorId: any; hasSuccess: boolean; hasFailed: boolean }> = [];
+    let zwingInvoiceIds: string[] = [];
+    if (dbName) {
+      const status = await this.zwingStatus.buildZwingJobStatus(ssoEnterpriseId, dbName, from, to);
+      byPair = status.byPair;
+      zwingInvoiceIds = status.invoiceIds;
+    }
+
+    const connectorMetrics: Record<string, { zwing: number; succeeded: number; failed: number }> = {};
+    for (const cid of connectorIds.map((id) => id.toString())) {
+      connectorMetrics[cid] = { zwing: zwingInvoiceIds.length, succeeded: 0, failed: 0 };
+    }
+    for (const p of byPair) {
+      const cid = p.connectorId?.toString();
+      if (!cid || !connectorMetrics[cid]) continue;
+      if (p.hasSuccess)     connectorMetrics[cid].succeeded++;
+      else if (p.hasFailed) connectorMetrics[cid].failed++;
     }
 
     const enrichedConnectors = connectors.map((c) => {
-      const jobs = jobMap[c._id.toString()] || {};
-      const total_jobs = Object.values(jobs).reduce((a: number, b: number) => a + (b as number), 0);
-      const failed = jobs['failed'] || 0;
-      const failure_rate = total_jobs > 0 ? Math.round((failed / total_jobs) * 100 * 10) / 10 : 0;
+      const cid = c._id.toString();
+      const cm  = connectorMetrics[cid] ?? { zwing: 0, succeeded: 0, failed: 0 };
+      const total_jobs   = cm.succeeded + cm.failed;
+      const success_rate = cm.zwing > 0
+        ? Math.round((cm.succeeded / cm.zwing) * 100 * 10) / 10 : 0;
+      const failure_rate = cm.zwing > 0
+        ? Math.round((cm.failed / cm.zwing) * 100 * 10) / 10 : 0;
 
       const mappings = cemList
         .filter((m) => m.connectorId.toString() === c._id.toString())
@@ -262,20 +250,16 @@ export class EnterprisesService {
         deletedOn: c.deletedOn,
         mappings,
         metrics: {
-          total_jobs,
-          failed,
-          success: jobs['success'] || 0,
-          pending: jobs['pending'] || 0,
-          failure_rate,
+          zwing_invoices: cm.zwing, total_jobs,
+          succeeded: cm.succeeded, failed: cm.failed,
+          success: cm.succeeded, pending: 0,
+          failure_rate, success_rate,
         },
       };
     });
 
     return {
-      enterprise: {
-        ...enterprise,
-        dbName: vendor?.db_name,
-      },
+      enterprise: { ...enterprise, dbName: vendor?.db_name },
       connectors: enrichedConnectors,
     };
   }
@@ -286,36 +270,12 @@ export class EnterprisesService {
       const placeholders = ssoIds.map(() => '?').join(',');
       return await this.mysql.query(
         this.mysql.getMasterDb(),
-        `SELECT id, name, sso_enterprise_id, db_name, db_type, status FROM vendor WHERE sso_enterprise_id IN (${placeholders}) AND deleted = 0`,
+        `SELECT id, name, sso_enterprise_id, db_name FROM vendor WHERE sso_enterprise_id IN (${placeholders}) AND deleted = 0`,
         ssoIds,
       );
     } catch (e) {
-      this.logger.warn(`Vendor query failed: ${e.message}`);
+      this.logger.warn(`Vendor query failed: ${errMsg(e)}`);
       return [];
     }
-  }
-
-  private async batchInvoiceCounts(
-    vendors: any[],
-    from: Date,
-    to: Date,
-  ): Promise<Record<string, number>> {
-    const result: Record<string, number> = {};
-    await Promise.allSettled(
-      vendors.map(async (v) => {
-        if (!v.db_name) return;
-        try {
-          const rows = await this.mysql.query(
-            v.db_name,
-            `SELECT COUNT(*) as cnt FROM invoices WHERE created_at BETWEEN ? AND ? AND deleted_at IS NULL`,
-            [from, to],
-          );
-          result[v.sso_enterprise_id] = (rows[0] as any)?.cnt ?? 0;
-        } catch (e) {
-          this.logger.warn(`Invoice count failed for ${v.db_name}: ${e.message}`);
-        }
-      }),
-    );
-    return result;
   }
 }

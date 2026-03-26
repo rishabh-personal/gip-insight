@@ -102,60 +102,60 @@ function EnterpriseRow({
         )}
       </td>
 
-      {/* GIP Jobs */}
+      {/* Processed (invoices GIP attempted) */}
       <td className="px-4 py-3.5 text-right">
         {isLoading ? <Skeleton w="w-8" /> : (
-          <span className="text-gray-700">{m?.total_jobs ?? 0}</span>
+          <span className="text-gray-700">{m?.processed ?? m?.total_jobs ?? 0}</span>
         )}
       </td>
 
-      {/* Sync Gap */}
+      {/* Not Captured (invoices in Zwing with no GIP job) */}
       <td className="px-4 py-3.5 text-right">
-        {isLoading ? <Skeleton w="w-8" /> : m?.sync_gap == null ? (
+        {isLoading ? <Skeleton w="w-8" /> : (m?.missing ?? m?.sync_gap) == null ? (
           <span className="text-gray-400 text-xs">N/A</span>
-        ) : m.sync_gap > 0 ? (
-          <span className="font-semibold text-red-600">{m.sync_gap}</span>
+        ) : (m?.missing ?? m?.sync_gap ?? 0) > 0 ? (
+          <span className="font-semibold text-red-600">{m?.missing ?? m?.sync_gap}</span>
         ) : (
           <span className="text-green-600 text-xs">✓ 0</span>
         )}
       </td>
 
-      {/* Success */}
+      {/* Succeeded invoices */}
       <td className="px-4 py-3.5 text-right">
         {isLoading ? <Skeleton w="w-8" /> : (
-          <span className="text-green-600">{m?.success ?? 0}</span>
+          <span className="text-green-600">{m?.succeeded ?? m?.success ?? 0}</span>
         )}
       </td>
 
-      {/* Failed */}
+      {/* Failed invoices */}
       <td className="px-4 py-3.5 text-right">
         {isLoading ? <Skeleton w="w-8" /> : (
-          <span className={m?.failed > 0 ? 'text-red-600 font-medium' : 'text-gray-400'}>
+          <span className={(m?.failed ?? 0) > 0 ? 'text-red-600 font-medium' : 'text-gray-400'}>
             {m?.failed ?? 0}
           </span>
         )}
       </td>
 
-      {/* Failure % */}
+      {/* Success % */}
       <td className="px-4 py-3.5 text-right">
         {isLoading ? <Skeleton w="w-14" /> : (
           <div className="flex items-center justify-end gap-2">
             <MiniBar
-              value={m?.failed ?? 0}
+              value={m?.success ?? 0}
               max={m?.total_jobs ?? 0}
               color={
-                (m?.failure_rate ?? 0) > 10 ? 'bg-red-400' :
-                (m?.failure_rate ?? 0) >= 2 ? 'bg-yellow-400' :
-                'bg-green-400'
+                (m?.success_rate ?? 0) >= 98 ? 'bg-green-400' :
+                (m?.success_rate ?? 0) >= 90 ? 'bg-yellow-400' :
+                'bg-red-400'
               }
             />
             <span className={cn(
               'text-xs font-medium w-10 text-right',
-              (m?.failure_rate ?? 0) > 10 ? 'text-red-600' :
-              (m?.failure_rate ?? 0) >= 2 ? 'text-yellow-600' :
-              'text-gray-500',
+              (m?.success_rate ?? 0) >= 98 ? 'text-green-600' :
+              (m?.success_rate ?? 0) >= 90 ? 'text-yellow-600' :
+              'text-red-600',
             )}>
-              {m?.failure_rate ?? 0}%
+              {m?.success_rate ?? 0}%
             </span>
           </div>
         )}
@@ -178,11 +178,11 @@ export function EnterpriseTable({ enterprises, from, to }: EnterpriseTableProps)
             <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Enterprise</th>
             <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Apps</th>
             <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Zwing Invoices</th>
-            <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">GIP Jobs</th>
-            <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Sync Gap</th>
-            <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Success</th>
+            <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Processed</th>
+            <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Not Captured</th>
+            <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Succeeded</th>
             <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Failed</th>
-            <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Failure %</th>
+            <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Success %</th>
             <th className="w-8"></th>
           </tr>
         </thead>

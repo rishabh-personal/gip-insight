@@ -8,20 +8,24 @@ import { ConnectorEventMapping } from '../schemas/connector-event-mapping.schema
 import { AppCatalog } from '../schemas/app-catalog.schema';
 import { EventCatalog } from '../schemas/event-catalog.schema';
 import { Enterprise } from '../schemas/enterprise.schema';
+import { ZwingStatusService, errMsg } from '../common/zwing-status.service';
 
 @Injectable()
 export class DipJobsService {
   private readonly logger = new Logger(DipJobsService.name);
 
   constructor(
-    @InjectModel(DipJob.name) private jobModel: Model<DipJob>,
-    @InjectModel(DipJobTask.name) private taskModel: Model<DipJobTask>,
-    @InjectModel(Connector.name) private connectorModel: Model<Connector>,
-    @InjectModel(ConnectorEventMapping.name) private cemModel: Model<ConnectorEventMapping>,
-    @InjectModel(AppCatalog.name) private appModel: Model<AppCatalog>,
-    @InjectModel(EventCatalog.name) private eventModel: Model<EventCatalog>,
-    @InjectModel(Enterprise.name) private enterpriseModel: Model<Enterprise>,
+    @InjectModel(DipJob.name) private readonly jobModel: Model<DipJob>,
+    @InjectModel(DipJobTask.name) private readonly taskModel: Model<DipJobTask>,
+    @InjectModel(Connector.name) private readonly connectorModel: Model<Connector>,
+    @InjectModel(ConnectorEventMapping.name) private readonly cemModel: Model<ConnectorEventMapping>,
+    @InjectModel(AppCatalog.name) private readonly appModel: Model<AppCatalog>,
+    @InjectModel(EventCatalog.name) private readonly eventModel: Model<EventCatalog>,
+    @InjectModel(Enterprise.name) private readonly enterpriseModel: Model<Enterprise>,
+    private readonly zwingStatus: ZwingStatusService,
   ) {}
+
+  // ──────────────────────────────────────────────────────────────────────────
 
   /**
    * Returns ssoEnterpriseIds of enterprises that have a private app AND a Zwing VId.
@@ -50,11 +54,22 @@ export class DipJobsService {
 
   async getSummary(ssoEnterpriseId: string, from: Date, to: Date) {
     const match: any = { transactionDate: { $gte: from, $lte: to } };
+
     if (ssoEnterpriseId) {
       match.ssoEnterpriseId = ssoEnterpriseId;
     } else {
       const validIds = await this.getValidEnterpriseIds();
-      if (validIds.length) match.ssoEnterpriseId = { $in: validIds };
+      // If no valid enterprise IDs exist, return empty rather than querying all data
+      if (!validIds.length) {
+        return {
+          data: {
+            totals: { total: 0, success: 0, failed: 0, pending: 0, processing: 0, failure_rate: 0, success_rate: 0 },
+            byConnector: [],
+            timeseries: [],
+          },
+        };
+      }
+      match.ssoEnterpriseId = { $in: validIds };
     }
 
     const [byStatus, byConnector, timeseries] = await Promise.all([
@@ -76,9 +91,7 @@ export class DipJobsService {
         {
           $group: {
             _id: {
-              hour: {
-                $dateTrunc: { date: '$transactionDate', unit: 'hour' },
-              },
+              hour: { $dateTrunc: { date: '$transactionDate', unit: 'hour' } },
               status: '$status',
             },
             count: { $sum: 1 },
@@ -95,8 +108,9 @@ export class DipJobsService {
     }
     const failure_rate =
       totals.total > 0 ? Math.round((totals.failed / totals.total) * 100 * 10) / 10 : 0;
+    const success_rate =
+      totals.total > 0 ? Math.round((totals.success / totals.total) * 100 * 10) / 10 : 0;
 
-    // Enrich connector data
     const connectorIds = [...new Set(byConnector.map((r) => r._id.connectorId?.toString()))].filter(Boolean);
     const connectors = await this.connectorModel.find({
       _id: { $in: connectorIds.map((id) => new Types.ObjectId(id)) },
@@ -116,7 +130,6 @@ export class DipJobsService {
     const appMap: Record<string, any> = {};
     for (const a of apps) appMap[a._id.toString()] = a;
 
-    // Aggregate by connector
     const connectorSummary: Record<string, any> = {};
     for (const row of byConnector) {
       const cid = row._id.connectorId?.toString();
@@ -137,7 +150,7 @@ export class DipJobsService {
 
     return {
       data: {
-        totals: { ...totals, failure_rate },
+        totals: { ...totals, failure_rate, success_rate },
         byConnector: Object.values(connectorSummary),
         timeseries: timeseries.map((r) => ({
           hour: r._id.hour,
@@ -155,71 +168,121 @@ export class DipJobsService {
     to: Date;
     ssoEnterpriseId?: string;
     connectorId?: string;
-    appId?: string;
-  }) {
-    const match: any = {
-      status: 'failed',
-      transactionDate: { $gte: opts.from, $lte: opts.to },
-    };
+  }): Promise<any> {
     if (opts.ssoEnterpriseId) {
-      match.ssoEnterpriseId = opts.ssoEnterpriseId;
-    } else {
-      const validIds = await this.getValidEnterpriseIds();
-      if (validIds.length) match.ssoEnterpriseId = { $in: validIds };
+      return this.getFailedJobsForEnterprise(opts as Required<typeof opts>);
     }
-    if (opts.connectorId) match.connectorId = new Types.ObjectId(opts.connectorId);
-    if (opts.appId) match.inboundAppId = new Types.ObjectId(opts.appId);
 
+    // All-enterprises fallback: MongoDB-only
+    const baseMatch: any = { transactionDate: { $gte: opts.from, $lte: opts.to }, status: 'failed' };
+    const validIds = await this.getValidEnterpriseIds();
+    if (!validIds.length) return { data: [], meta: { total: 0, page: opts.page, limit: opts.limit } };
+    baseMatch.ssoEnterpriseId = { $in: validIds };
+    if (opts.connectorId) baseMatch.connectorId = new Types.ObjectId(opts.connectorId);
+
+    const skip = (opts.page - 1) * opts.limit;
     const [jobs, total] = await Promise.all([
-      this.jobModel
-        .find(match)
-        .sort({ transactionDate: -1 })
-        .skip((opts.page - 1) * opts.limit)
-        .limit(opts.limit)
-        .lean(),
-      this.jobModel.countDocuments(match),
+      this.jobModel.find(baseMatch).sort({ transactionDate: -1 }).skip(skip).limit(opts.limit).lean(),
+      this.jobModel.countDocuments(baseMatch),
     ]);
-
     const enriched = await this.enrichJobs(jobs);
     return { data: enriched, meta: { total, page: opts.page, limit: opts.limit } };
   }
 
   /**
-   * Lightweight failed-job summary for one enterprise.
-   * Returns the count + a preview of the most recent failed jobs.
-   * Called async per-row on the failed jobs page.
+   * Per-enterprise failed jobs using Zwing MySQL as the source of truth.
+   * 1. Fetch Zwing invoice IDs for the date window.
+   * 2. Find GIP jobs for those IDs (transactionDate >= windowStart, no upper bound).
+   * 3. Return one row per invoice that has NO success for any connector,
+   *    showing the most recent error per (invoice, connector) pair.
+   */
+  private async getFailedJobsForEnterprise(opts: {
+    page: number; limit: number;
+    from: Date; to: Date;
+    ssoEnterpriseId: string;
+    connectorId?: string;
+  }): Promise<any> {
+    const dbName = await this.zwingStatus.getVendorDbName(opts.ssoEnterpriseId);
+    if (!dbName) return { data: [], meta: { total: 0, page: opts.page, limit: opts.limit } };
+
+    const { byInvoice, byPair } = await this.zwingStatus.buildZwingJobStatus(
+      opts.ssoEnterpriseId, dbName, opts.from, opts.to,
+    );
+
+    let failedPairs = byPair.filter((p) => {
+      const inv = byInvoice.get(p.refDocNo);
+      return !inv?.hasSuccess && p.hasFailed;
+    });
+
+    if (opts.connectorId) {
+      failedPairs = failedPairs.filter(
+        (p) => p.connectorId?.toString() === opts.connectorId,
+      );
+    }
+
+    const total = failedPairs.length;
+    const skip  = (opts.page - 1) * opts.limit;
+    const page  = failedPairs
+      .sort((a, b) => (b.latestDate?.getTime() ?? 0) - (a.latestDate?.getTime() ?? 0))
+      .slice(skip, skip + opts.limit);
+
+    if (!page.length) return { data: [], meta: { total, page: opts.page, limit: opts.limit } };
+
+    const jobs = await this.jobModel
+      .find({ _id: { $in: page.map((p) => p.latestJobId).filter(Boolean) } })
+      .lean();
+    const attemptsMap = new Map(
+      page.map((p) => [p.latestJobId?.toString(), p.failedAttempts]),
+    );
+    const merged = jobs.map((j) => ({
+      ...j,
+      failedAttempts: attemptsMap.get(j._id.toString()) ?? 1,
+    }));
+
+    const enriched = await this.enrichJobs(merged);
+    return { data: enriched, meta: { total, page: opts.page, limit: opts.limit } };
+  }
+
+  /**
+   * Lightweight failed-invoice summary for one enterprise (used async per-row
+   * on the failed jobs page). Uses Zwing MySQL as the source of truth.
    */
   async getEnterpriseFailedSummary(
     ssoEnterpriseId: string,
     from: Date,
     to: Date,
     previewLimit = 5,
-  ) {
-    const match = {
-      ssoEnterpriseId,
-      status: 'failed',
-      transactionDate: { $gte: from, $lte: to },
-    };
+  ): Promise<any> {
+    const dbName = await this.zwingStatus.getVendorDbName(ssoEnterpriseId);
+    if (!dbName) return { data: { count: 0, jobs: [] } };
 
-    const [count, jobs] = await Promise.all([
-      this.jobModel.countDocuments(match),
-      this.jobModel
-        .find(match, {
-          _id: 1,
-          refDocNo: 1,
-          error: 1,
-          retryCount: 1,
-          transactionDate: 1,
-          connectorId: 1,
-        })
-        .sort({ transactionDate: -1 })
-        .limit(previewLimit)
-        .lean(),
-    ]);
+    const { byInvoice, byPair } = await this.zwingStatus.buildZwingJobStatus(
+      ssoEnterpriseId, dbName, from, to,
+    );
 
-    if (!jobs.length) return { data: { count: 0, jobs: [] } };
+    const failedInvoiceIds = [...byInvoice.entries()]
+      .filter(([, v]) => !v.hasSuccess && v.hasAnyJob)
+      .map(([id]) => id);
 
-    const connectorIds = [...new Set(jobs.map((j) => j.connectorId?.toString()).filter(Boolean))];
+    const count = failedInvoiceIds.length;
+    if (count === 0) return { data: { count: 0, jobs: [] } };
+
+    const failedPairs = byPair
+      .filter((p) => failedInvoiceIds.includes(p.refDocNo) && p.hasFailed)
+      .sort((a, b) => (b.latestDate?.getTime() ?? 0) - (a.latestDate?.getTime() ?? 0));
+
+    // One entry per invoice — pick the most recent across connectors
+    const seenInvoices = new Set<string>();
+    const preview: typeof failedPairs = [];
+    for (const p of failedPairs) {
+      if (!seenInvoices.has(p.refDocNo)) {
+        seenInvoices.add(p.refDocNo);
+        preview.push(p);
+        if (preview.length >= previewLimit) break;
+      }
+    }
+
+    const connectorIds = [...new Set(preview.map((p) => p.connectorId?.toString()).filter(Boolean))];
     const connectors = await this.connectorModel
       .find({ _id: { $in: connectorIds.map((id) => new Types.ObjectId(id)) } }, { name: 1 })
       .lean();
@@ -229,13 +292,13 @@ export class DipJobsService {
     return {
       data: {
         count,
-        jobs: jobs.map((j) => ({
-          _id: j._id,
-          refDocNo: j.refDocNo,
-          error: j.error,
-          retryCount: j.retryCount,
-          transactionDate: j.transactionDate,
-          connectorName: connectorMap[j.connectorId?.toString()]?.name ?? null,
+        jobs: preview.map((p) => ({
+          _id: p.latestJobId,
+          refDocNo: p.refDocNo,
+          error: p.latestError,
+          failedAttempts: p.failedAttempts,
+          transactionDate: p.latestDate,
+          connectorName: connectorMap[p.connectorId?.toString()]?.name ?? null,
         })),
       },
     };
@@ -282,7 +345,6 @@ export class DipJobsService {
     const enterpriseMap: Record<string, any> = {};
     for (const e of enterprises) enterpriseMap[e.ssoEnterpriseId] = e;
 
-    // Fetch event codes via connectorAppEventId
     const cemIds = [...new Set(jobs.map((j) => j.connectorAppEventId?.toString()))].filter(Boolean);
     const cems = await this.cemModel.find({
       _id: { $in: cemIds.map((id) => new Types.ObjectId(id)) },
@@ -299,14 +361,13 @@ export class DipJobsService {
 
     return jobs.map((j) => {
       const cem = cemMap[j.connectorAppEventId?.toString()];
-      const event = cem ? eventMap[cem.outboundEventId?.toString()] : null;
       return {
         ...j,
         connector: connectorMap[j.connectorId?.toString()],
         outboundApp: appMap[j.outboundAppId?.toString()],
         inboundApp: appMap[j.inboundAppId?.toString()],
         enterprise: enterpriseMap[j.ssoEnterpriseId],
-        event,
+        event: cem ? eventMap[cem.outboundEventId?.toString()] : null,
       };
     });
   }

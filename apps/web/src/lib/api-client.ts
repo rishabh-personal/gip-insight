@@ -1,6 +1,8 @@
 import axios from 'axios';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+// Dev: NEXT_PUBLIC_API_URL=http://localhost:3001 (set in .env)
+// Prod: not set → empty string → relative URL → proxied by Next.js rewrites → backend container
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
 
 export const api = axios.create({
   baseURL: `${API_BASE}/api/dashboard`,
@@ -26,6 +28,10 @@ export const getEnterprise = (ssoEnterpriseId: string, params: Record<string, an
 // ---- Sync Gap ----
 export const getSyncGap = (ssoEnterpriseId: string, params: Record<string, any> = {}) =>
   api.get(`/enterprises/${ssoEnterpriseId}/sync-gap`, { params }).then((r) => r.data);
+
+/** Re-trigger Debezium events by setting sync_status=5 on selected Zwing invoice IDs. */
+export const retriggerInvoices = (ssoEnterpriseId: string, invoiceIds: string[]) =>
+  api.post(`/enterprises/${ssoEnterpriseId}/sync-gap/retrigger`, { invoiceIds }).then((r) => r.data);
 
 // ---- Jobs ----
 export const getJobSummary = (ssoEnterpriseId: string, params: Record<string, any> = {}) =>

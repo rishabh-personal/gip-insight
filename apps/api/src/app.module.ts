@@ -1,7 +1,8 @@
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
-import { ThrottlerModule } from '@nestjs/throttler';
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import configuration from './config/configuration';
 import { DatabaseModule } from './database/database.module';
 import { EnterprisesModule } from './enterprises/enterprises.module';
@@ -12,16 +13,10 @@ import { HealthModule } from './health/health.module';
 
 function buildMongoUri(): string {
   const raw = process.env.MONGODB_URI || '';
-  const proxyPort = process.env.MONGO_PROXY_PORT;
-
-  if (!proxyPort) {
-    // No proxy — use raw URI as-is (direct connection; may fail if IP not whitelisted)
-    console.log('[AppModule] MongoDB: direct connection (no SOCKS5 proxy configured)');
+  if (!process.env.MONGO_PROXY_PORT) {
+    // No SOCKS5 proxy — use raw URI as-is (direct Atlas connection; may fail if IP not whitelisted)
     return raw;
   }
-
-  // Keep the original mongodb+srv:// URI; driver handles SRV + TLS normally.
-  // The proxy options are passed separately in the options object below.
   return raw;
 }
 
@@ -35,9 +30,9 @@ function buildMongoUri(): string {
 
     MongooseModule.forRoot(buildMongoUri(), {
       dbName: process.env.MONGODB_DB_NAME || 'gip-prod',
-      // Don't block NestJS startup waiting for MongoDB — connect on first use
+      // Don't block NestJS startup — connect on first use
       lazyConnection: true,
-      // If SOCKS5 proxy is up, route all Atlas traffic through it
+      // Route Atlas traffic through the SOCKS5 proxy when it is available
       ...(process.env.MONGO_PROXY_PORT
         ? {
             proxyHost: '127.0.0.1',
@@ -56,6 +51,10 @@ function buildMongoUri(): string {
     TraceModule,
     SyncGapModule,
     HealthModule,
+  ],
+  providers: [
+    // Rate-limit all routes globally: 120 requests / 60 s per IP
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
   ],
 })
 export class AppModule {}

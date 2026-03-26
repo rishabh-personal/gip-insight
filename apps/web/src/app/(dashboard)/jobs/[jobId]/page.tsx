@@ -1,13 +1,13 @@
 'use client';
 
-import { Suspense } from 'react';
+import { Suspense, use } from 'react';
 import { JobDetailView } from '@/components/jobs/job-detail-view';
-import { use } from 'react';
+import { PageLoader } from '@/components/ui/loading';
 
 export default function JobDetailPage({ params }: { params: Promise<{ jobId: string }> }) {
   const { jobId } = use(params);
   return (
-    <Suspense>
+    <Suspense fallback={<PageLoader />}>
       <JobDetailView jobId={jobId} />
     </Suspense>
   );
