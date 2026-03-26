@@ -27,7 +27,7 @@ export function DateRangeBar() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const activePreset = (searchParams.get('preset') as DatePreset) || 'today';
+  const activePreset = (searchParams.get('preset') as DatePreset | 'custom') || 'today';
   const isCustom = activePreset === 'custom';
 
   const [open, setOpen] = useState(false);
