@@ -27,6 +27,8 @@ ENV NEXT_TELEMETRY_DISABLED=1
 
 COPY --from=builder /app/node_modules       ./node_modules
 COPY --from=builder /app/apps/web/.next     ./apps/web/.next
+# public/ may be empty; ensure the directory exists before copying
+RUN mkdir -p ./apps/web/public
 COPY --from=builder /app/apps/web/public    ./apps/web/public
 
 COPY package.json              ./
