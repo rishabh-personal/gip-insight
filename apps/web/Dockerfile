@@ -11,9 +11,8 @@ RUN npm ci --workspace=apps/web
 COPY apps/web ./apps/web
 
 ENV NEXT_TELEMETRY_DISABLED=1
-
-# Build without NEXT_PUBLIC_API_URL → empty string → browser uses relative URLs
-# → Next.js rewrites proxy /api/* to the backend container at runtime
+# NODE_ENV=production is set by Next.js automatically during `next build`,
+# which causes next.config.ts rewrites to target http://gip-api:3001 (Docker DNS).
 RUN npm run build --workspace=apps/web
 
 RUN npm prune --omit=dev

@@ -205,11 +205,24 @@ export class EnterprisesService {
     const dbName = vendor?.db_name ?? null;
     let byPair: Array<{ refDocNo: string; connectorId: any; hasSuccess: boolean; hasFailed: boolean }> = [];
     let zwingInvoiceIds: string[] = [];
+    let byInvoice: Map<string, { hasSuccess: boolean; hasAnyJob: boolean }> = new Map();
     if (dbName) {
       const status = await this.zwingStatus.buildZwingJobStatus(ssoEnterpriseId, dbName, from, to);
       byPair = status.byPair;
       zwingInvoiceIds = status.invoiceIds;
+      byInvoice = status.byInvoice;
     }
+
+    // Overall invoice-level totals (same logic as getEnterpriseMetrics)
+    let totalSucceeded = 0, totalFailed = 0, totalMissing = 0;
+    for (const [, v] of byInvoice) {
+      if (v.hasSuccess)       totalSucceeded++;
+      else if (v.hasAnyJob)   totalFailed++;
+      else                    totalMissing++;
+    }
+    const zwing_invoices = zwingInvoiceIds.length;
+    const total_success_rate = zwing_invoices > 0
+      ? Math.round((totalSucceeded / zwing_invoices) * 100 * 10) / 10 : 0;
 
     const connectorMetrics: Record<string, { zwing: number; succeeded: number; failed: number }> = {};
     for (const cid of connectorIds.map((id) => id.toString())) {
@@ -261,6 +274,13 @@ export class EnterprisesService {
     return {
       enterprise: { ...enterprise, dbName: vendor?.db_name },
       connectors: enrichedConnectors,
+      totals: {
+        total: zwing_invoices,
+        success: totalSucceeded,
+        failed: totalFailed,
+        pending: totalMissing,
+        success_rate: total_success_rate,
+      },
     };
   }
 

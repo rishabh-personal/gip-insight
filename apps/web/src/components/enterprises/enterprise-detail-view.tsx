@@ -3,7 +3,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { getEnterprise, getJobSummary } from '@/lib/api-client';
+import { getEnterprise } from '@/lib/api-client';
 import { useDateRange } from '@/hooks/use-date-range';
 import { cn } from '@/lib/utils';
 import { PageLoader, ErrorState, EmptyState } from '@/components/ui/loading';
@@ -20,17 +20,12 @@ export function EnterpriseDetailView({ ssoEnterpriseId }: { ssoEnterpriseId: str
     queryFn: () => getEnterprise(ssoEnterpriseId, { from, to }),
   });
 
-  const { data: summaryData } = useQuery({
-    queryKey: ['job-summary', ssoEnterpriseId, from, to],
-    queryFn: () => getJobSummary(ssoEnterpriseId, { from, to }),
-  });
-
   if (isLoading) return <PageLoader />;
   if (isError) return <ErrorState />;
 
   const enterprise = data?.data?.enterprise;
   const connectors = data?.data?.connectors || [];
-  const totals = summaryData?.data?.totals || {};
+  const totals = data?.data?.totals || {};
 
   return (
     <div className="space-y-6">
