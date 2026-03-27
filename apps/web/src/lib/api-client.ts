@@ -1,11 +1,9 @@
 import axios from 'axios';
 
-// Dev: NEXT_PUBLIC_API_URL=http://localhost:3001 (set in .env)
-// Prod: not set → empty string → relative URL → proxied by Next.js rewrites → backend container
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || '';
-
+// Always use relative URLs. Next.js rewrites proxy /api/* to the NestJS backend
+// (localhost:3001 in dev, gip-api:3001 in production Docker — see next.config.ts).
 export const api = axios.create({
-  baseURL: `${API_BASE}/api/dashboard`,
+  baseURL: '/api/dashboard',
   timeout: 30000,
 });
 
