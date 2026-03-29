@@ -71,11 +71,12 @@ export function EnterpriseDetailView({ ssoEnterpriseId }: { ssoEnterpriseId: str
       </div>
 
       {/* Job metrics — all values are invoice-level, not raw job counts */}
-      <div className="grid grid-cols-5 gap-4">
+      <div className="grid grid-cols-6 gap-4">
         <StatCard label="Zwing Invoices" value={totals.total ?? 0} color="default" sub="in selected window" />
         <StatCard label="Succeeded" value={totals.success ?? 0} color="green" sub="delivered successfully" />
-        <StatCard label="Failed" value={totals.failed ?? 0} color={totals.failed > 0 ? 'red' : 'default'} sub="no success for any connector" />
-        <StatCard label="Not Captured" value={totals.pending ?? 0} color="yellow" sub="no GIP job found" />
+        <StatCard label="Failed" value={totals.failed ?? 0} color={(totals.failed ?? 0) > 0 ? 'red' : 'default'} sub="no success for any connector" />
+        <StatCard label="Pending" value={totals.pending ?? 0} color={(totals.pending ?? 0) > 0 ? 'yellow' : 'default'} sub="GIP job in-flight" />
+        <StatCard label="Not Captured" value={totals.missing ?? 0} color={(totals.missing ?? 0) > 0 ? 'yellow' : 'default'} sub="no GIP job found" />
         <StatCard
           label="Success Rate"
           value={`${totals.success_rate ?? 0}%`}
@@ -133,8 +134,14 @@ function ConnectorCard({ connector: c, onViewJobs }: { connector: any; onViewJob
             <p className="font-semibold text-gray-800">{m.total_jobs ?? 0}</p>
           </div>
           <div className="text-center">
+            <p className="text-xs text-gray-400">Pending</p>
+            <p className={cn('font-semibold', (m.pending ?? 0) > 0 ? 'text-yellow-600' : 'text-gray-400')}>
+              {m.pending ?? 0}
+            </p>
+          </div>
+          <div className="text-center">
             <p className="text-xs text-gray-400">Failed</p>
-            <p className={cn('font-semibold', m.failed > 0 ? 'text-red-600' : 'text-gray-400')}>
+            <p className={cn('font-semibold', (m.failed ?? 0) > 0 ? 'text-red-600' : 'text-gray-400')}>
               {m.failed ?? 0}
             </p>
           </div>

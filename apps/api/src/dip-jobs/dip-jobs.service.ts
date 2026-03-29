@@ -211,7 +211,7 @@ export class DipJobsService {
 
     let failedPairs = byPair.filter((p) => {
       const inv = byInvoice.get(p.refDocNo);
-      return !inv?.hasSuccess && p.hasFailed;
+      return !inv?.hasSuccess && p.hasFailed && !p.hasPendingOnly;
     });
 
     if (opts.connectorId) {
@@ -261,7 +261,7 @@ export class DipJobsService {
     );
 
     const failedInvoiceIds = [...byInvoice.entries()]
-      .filter(([, v]) => !v.hasSuccess && v.hasAnyJob)
+      .filter(([, v]) => !v.hasSuccess && v.hasAnyFailed && !v.hasPendingOnly)
       .map(([id]) => id);
 
     const count = failedInvoiceIds.length;

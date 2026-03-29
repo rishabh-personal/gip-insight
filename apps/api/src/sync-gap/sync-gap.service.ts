@@ -4,7 +4,7 @@ import { Model } from 'mongoose';
 import { DipJob } from '../schemas/dip-job.schema';
 import { Enterprise } from '../schemas/enterprise.schema';
 import { MysqlTenantService } from '../database/mysql-tenant.service';
-import { errMsg } from '../common/zwing-status.service';
+import { ZwingStatusService, errMsg } from '../common/zwing-status.service';
 
 @Injectable()
 export class SyncGapService {
@@ -14,6 +14,7 @@ export class SyncGapService {
     @InjectModel(DipJob.name) private jobModel: Model<DipJob>,
     @InjectModel(Enterprise.name) private enterpriseModel: Model<Enterprise>,
     private readonly mysql: MysqlTenantService,
+    private readonly zwingStatus: ZwingStatusService,
   ) {}
 
   /**
@@ -55,6 +56,83 @@ export class SyncGapService {
     }
 
     return { updated, batches };
+  }
+
+  /**
+   * Returns invoices that have been captured by GIP but whose jobs are still
+   * in pending/processing state (no success, no failure yet).
+   * These can be re-triggered the same way as missed events.
+   */
+  async getPendingInvoices(ssoEnterpriseId: string, from: Date, to: Date): Promise<any> {
+    const enterprise = await this.enterpriseModel.findOne({ ssoEnterpriseId }).lean();
+    if (!enterprise) return { data: null };
+
+    const vendors = await this.mysql.query(
+      this.mysql.getMasterDb(),
+      `SELECT db_name FROM vendor WHERE sso_enterprise_id = ? AND deleted = 0 LIMIT 1`,
+      [ssoEnterpriseId],
+    );
+    const vendor = vendors[0] as any;
+    if (!vendor?.db_name) {
+      return { data: { enterprise: { ssoEnterpriseId, tradeName: enterprise.tradeName }, count: 0, pendingInvoices: [] } };
+    }
+
+    const [zwingRows, statusResult] = await Promise.all([
+      this.mysql.query(
+        vendor.db_name,
+        `SELECT invoice_id, store_id, transaction_type, transaction_sub_type, status, created_at
+         FROM invoices WHERE created_at BETWEEN ? AND ? AND deleted_at IS NULL`,
+        [from, to],
+      ).catch((e) => {
+        this.logger.warn(`[getPendingInvoices] MySQL query failed: ${errMsg(e)}`);
+        return [] as any[];
+      }),
+      this.zwingStatus.buildZwingJobStatus(ssoEnterpriseId, vendor.db_name, from, to),
+    ]);
+
+    const { byInvoice, byPair } = statusResult;
+
+    // Find invoices that are pending-only
+    const pendingIds = new Set(
+      [...byInvoice.entries()]
+        .filter(([, v]) => v.hasPendingOnly)
+        .map(([id]) => id),
+    );
+
+    if (!pendingIds.size) {
+      return {
+        data: {
+          enterprise: { ssoEnterpriseId, tradeName: enterprise.tradeName, dbName: vendor.db_name },
+          count: 0,
+          pendingInvoices: [],
+        },
+      };
+    }
+
+    // Build latest GIP job info per invoice (take the most recent pair)
+    const jobInfoMap = new Map<string, { latestDate: Date }>();
+    for (const p of byPair) {
+      if (!p.hasPendingOnly || !pendingIds.has(p.refDocNo)) continue;
+      const existing = jobInfoMap.get(p.refDocNo);
+      if (!existing || (p.latestDate && p.latestDate > existing.latestDate)) {
+        jobInfoMap.set(p.refDocNo, { latestDate: p.latestDate });
+      }
+    }
+
+    const pendingInvoices = (zwingRows as any[])
+      .filter((r) => pendingIds.has(String(r.invoice_id)))
+      .map((r) => ({
+        ...r,
+        gipLastAttempt: jobInfoMap.get(String(r.invoice_id))?.latestDate ?? null,
+      }));
+
+    return {
+      data: {
+        enterprise: { ssoEnterpriseId, tradeName: enterprise.tradeName, dbName: vendor.db_name },
+        count: pendingInvoices.length,
+        pendingInvoices,
+      },
+    };
   }
 
   async getSyncGap(

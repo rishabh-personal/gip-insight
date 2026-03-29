@@ -128,14 +128,15 @@ export class EnterprisesService {
     );
 
     const zwing_invoices = invoiceIds.length;
-    let succeeded = 0, failed = 0, missing = 0;
+    let succeeded = 0, failed = 0, pending = 0, missing = 0;
     for (const [, v] of byInvoice) {
-      if (v.hasSuccess)       succeeded++;
-      else if (v.hasAnyJob)   failed++;
-      else                    missing++;
+      if (v.hasSuccess)         succeeded++;
+      else if (v.hasPendingOnly) pending++;
+      else if (v.hasAnyFailed)  failed++;
+      else                      missing++;
     }
     const processed    = succeeded + failed;
-    const sync_gap     = missing;
+    const sync_gap     = missing + pending;
     const success_rate = zwing_invoices > 0
       ? Math.round((succeeded / zwing_invoices) * 100 * 10) / 10 : 0;
     const failure_rate = zwing_invoices > 0
@@ -150,11 +151,10 @@ export class EnterprisesService {
       health,
       dbName,
       metrics: {
-        zwing_invoices, succeeded, failed, missing, processed, sync_gap,
+        zwing_invoices, succeeded, failed, pending, missing, processed, sync_gap,
         success: succeeded,
         total_jobs: processed,
         gip_events: processed,
-        pending: 0,
         processing: 0,
         success_rate,
         failure_rate,
@@ -203,9 +203,9 @@ export class EnterprisesService {
     for (const ev of events) eventMap[ev._id.toString()] = ev;
 
     const dbName = vendor?.db_name ?? null;
-    let byPair: Array<{ refDocNo: string; connectorId: any; hasSuccess: boolean; hasFailed: boolean }> = [];
+    let byPair: Array<{ refDocNo: string; connectorId: any; hasSuccess: boolean; hasFailed: boolean; hasPendingOnly: boolean }> = [];
     let zwingInvoiceIds: string[] = [];
-    let byInvoice: Map<string, { hasSuccess: boolean; hasAnyJob: boolean }> = new Map();
+    let byInvoice: Map<string, { hasSuccess: boolean; hasAnyJob: boolean; hasAnyFailed: boolean; hasPendingOnly: boolean }> = new Map();
     if (dbName) {
       const status = await this.zwingStatus.buildZwingJobStatus(ssoEnterpriseId, dbName, from, to);
       byPair = status.byPair;
@@ -214,30 +214,32 @@ export class EnterprisesService {
     }
 
     // Overall invoice-level totals (same logic as getEnterpriseMetrics)
-    let totalSucceeded = 0, totalFailed = 0, totalMissing = 0;
+    let totalSucceeded = 0, totalFailed = 0, totalPending = 0, totalMissing = 0;
     for (const [, v] of byInvoice) {
-      if (v.hasSuccess)       totalSucceeded++;
-      else if (v.hasAnyJob)   totalFailed++;
-      else                    totalMissing++;
+      if (v.hasSuccess)          totalSucceeded++;
+      else if (v.hasPendingOnly) totalPending++;
+      else if (v.hasAnyFailed)   totalFailed++;
+      else                       totalMissing++;
     }
     const zwing_invoices = zwingInvoiceIds.length;
     const total_success_rate = zwing_invoices > 0
       ? Math.round((totalSucceeded / zwing_invoices) * 100 * 10) / 10 : 0;
 
-    const connectorMetrics: Record<string, { zwing: number; succeeded: number; failed: number }> = {};
+    const connectorMetrics: Record<string, { zwing: number; succeeded: number; failed: number; pending: number }> = {};
     for (const cid of connectorIds.map((id) => id.toString())) {
-      connectorMetrics[cid] = { zwing: zwingInvoiceIds.length, succeeded: 0, failed: 0 };
+      connectorMetrics[cid] = { zwing: zwingInvoiceIds.length, succeeded: 0, failed: 0, pending: 0 };
     }
     for (const p of byPair) {
       const cid = p.connectorId?.toString();
       if (!cid || !connectorMetrics[cid]) continue;
-      if (p.hasSuccess)     connectorMetrics[cid].succeeded++;
-      else if (p.hasFailed) connectorMetrics[cid].failed++;
+      if (p.hasSuccess)          connectorMetrics[cid].succeeded++;
+      else if (p.hasPendingOnly) connectorMetrics[cid].pending++;
+      else if (p.hasFailed)      connectorMetrics[cid].failed++;
     }
 
     const enrichedConnectors = connectors.map((c) => {
       const cid = c._id.toString();
-      const cm  = connectorMetrics[cid] ?? { zwing: 0, succeeded: 0, failed: 0 };
+      const cm  = connectorMetrics[cid] ?? { zwing: 0, succeeded: 0, failed: 0, pending: 0 };
       const total_jobs   = cm.succeeded + cm.failed;
       const success_rate = cm.zwing > 0
         ? Math.round((cm.succeeded / cm.zwing) * 100 * 10) / 10 : 0;
@@ -264,8 +266,8 @@ export class EnterprisesService {
         mappings,
         metrics: {
           zwing_invoices: cm.zwing, total_jobs,
-          succeeded: cm.succeeded, failed: cm.failed,
-          success: cm.succeeded, pending: 0,
+          succeeded: cm.succeeded, failed: cm.failed, pending: cm.pending,
+          success: cm.succeeded,
           failure_rate, success_rate,
         },
       };
@@ -278,7 +280,8 @@ export class EnterprisesService {
         total: zwing_invoices,
         success: totalSucceeded,
         failed: totalFailed,
-        pending: totalMissing,
+        pending: totalPending,
+        missing: totalMissing,
         success_rate: total_success_rate,
       },
     };

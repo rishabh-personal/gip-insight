@@ -109,7 +109,16 @@ function EnterpriseRow({
         )}
       </td>
 
-      {/* Not Captured (invoices in Zwing with no GIP job) */}
+      {/* Pending (GIP job in-flight, not yet success or failed) */}
+      <td className="px-4 py-3.5 text-right">
+        {isLoading ? <Skeleton w="w-8" /> : (
+          <span className={(m?.pending ?? 0) > 0 ? 'font-medium text-yellow-600' : 'text-gray-400'}>
+            {m?.pending ?? 0}
+          </span>
+        )}
+      </td>
+
+      {/* Not Captured (no GIP job found at all) */}
       <td className="px-4 py-3.5 text-right">
         {isLoading ? <Skeleton w="w-8" /> : (m?.missing ?? m?.sync_gap) == null ? (
           <span className="text-gray-400 text-xs">N/A</span>
@@ -179,6 +188,7 @@ export function EnterpriseTable({ enterprises, from, to }: EnterpriseTableProps)
             <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Apps</th>
             <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Zwing Invoices</th>
             <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Processed</th>
+            <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Pending</th>
             <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Not Captured</th>
             <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Succeeded</th>
             <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Failed</th>
