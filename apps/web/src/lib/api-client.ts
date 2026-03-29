@@ -27,7 +27,11 @@ export const getEnterprise = (ssoEnterpriseId: string, params: Record<string, an
 export const getSyncGap = (ssoEnterpriseId: string, params: Record<string, any> = {}) =>
   api.get(`/enterprises/${ssoEnterpriseId}/sync-gap`, { params }).then((r) => r.data);
 
-/** Re-trigger Debezium events by setting sync_status=5 on selected Zwing invoice IDs. */
+/** Invoices captured by GIP but stuck in pending/processing state. */
+export const getPendingInvoices = (ssoEnterpriseId: string, params: Record<string, any> = {}) =>
+  api.get(`/enterprises/${ssoEnterpriseId}/sync-gap/pending`, { params }).then((r) => r.data);
+
+/** Re-trigger Debezium events by incrementing sync_status on selected Zwing invoice IDs. */
 export const retriggerInvoices = (ssoEnterpriseId: string, invoiceIds: string[]) =>
   api.post(`/enterprises/${ssoEnterpriseId}/sync-gap/retrigger`, { invoiceIds }).then((r) => r.data);
 

@@ -18,6 +18,15 @@ export class SyncGapController {
     return { data: result };
   }
 
+  @Get('pending')
+  @ApiOperation({ summary: 'Invoices captured by GIP but stuck in pending/processing state — eligible for re-trigger' })
+  async pendingInvoices(
+    @Param('ssoEnterpriseId') ssoEnterpriseId: string,
+    @Query() pagination: PaginationDto,
+  ) {
+    return this.svc.getPendingInvoices(ssoEnterpriseId, pagination.fromDate, pagination.toDate);
+  }
+
   @Get()
   @ApiOperation({ summary: 'Zwing vs GIP reconciliation — detect missed Debezium events (STORY-003)' })
   @ApiQuery({ name: 'transactionType', required: false, enum: ['sales', 'return'] })
