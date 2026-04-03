@@ -2,14 +2,21 @@
 
 import { useQuery } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
+import { useEffect, Fragment } from 'react';
 import { getEnterpriseMetrics } from '@/lib/api-client';
 import { cn } from '@/lib/utils';
-import { ChevronRight } from 'lucide-react';
+import { ChevronRight, Star, FlaskConical } from 'lucide-react';
 
 interface EnterpriseTableProps {
   enterprises: any[];
   from: string;
   to: string;
+  importantCount?: number;
+  isImportant?: (id: string) => boolean;
+  isTest?: (id: string) => boolean;
+  toggleImportant?: (id: string) => void;
+  toggleTest?: (id: string) => void;
+  onFailureReport?: (id: string, hasFailed: boolean) => void;
 }
 
 function HealthDot({ health }: { health?: string }) {
@@ -47,12 +54,25 @@ function EnterpriseRow({
   enterprise,
   from,
   to,
+  isImportant,
+  isTest,
+  toggleImportant,
+  toggleTest,
+  onFailureReport,
 }: {
   enterprise: any;
   from: string;
   to: string;
+  isImportant?: (id: string) => boolean;
+  isTest?: (id: string) => boolean;
+  toggleImportant?: (id: string) => void;
+  toggleTest?: (id: string) => void;
+  onFailureReport?: (id: string, hasFailed: boolean) => void;
 }) {
   const router = useRouter();
+  const id = enterprise.ssoEnterpriseId;
+  const important = isImportant?.(id);
+  const test = isTest?.(id);
 
   const { data, isLoading } = useQuery({
     queryKey: ['enterprise-metrics', enterprise.ssoEnterpriseId, from, to],
@@ -62,11 +82,24 @@ function EnterpriseRow({
 
   const m = data?.data?.metrics;
   const health = data?.data?.health;
+  const hasFailed = (m?.failed ?? 0) > 0;
+
+  // Report failure status to parent so the "Needs Attention" tab can populate
+  useEffect(() => {
+    if (!data || !important) return;
+    onFailureReport?.(id, hasFailed);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasFailed, important]);
 
   return (
     <tr
       onClick={() => router.push(`/enterprises/${enterprise.ssoEnterpriseId}?from=${from}&to=${to}`)}
-      className="cursor-pointer hover:bg-gray-50 transition-colors"
+      className={cn(
+        'cursor-pointer transition-colors',
+        important && hasFailed
+          ? 'bg-red-50 hover:bg-red-100'
+          : 'hover:bg-gray-50',
+      )}
     >
       {/* Health dot */}
       <td className="px-4 py-3.5">
@@ -170,14 +203,47 @@ function EnterpriseRow({
         )}
       </td>
 
-      <td className="px-3 py-3.5">
-        <ChevronRight className="w-4 h-4 text-gray-300" />
+      {/* Label actions */}
+      <td className="px-3 py-3.5" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center gap-1">
+          <button
+            title={important ? 'Remove from Important' : 'Mark as Important'}
+            onClick={() => toggleImportant?.(id)}
+            className={cn(
+              'p-1 rounded transition-colors',
+              important ? 'text-yellow-500 hover:text-yellow-600' : 'text-gray-200 hover:text-yellow-400',
+            )}
+          >
+            <Star className={cn('w-3.5 h-3.5', important && 'fill-yellow-400')} />
+          </button>
+          <button
+            title={test ? 'Remove from Test/UAT' : 'Mark as Test/UAT'}
+            onClick={() => toggleTest?.(id)}
+            className={cn(
+              'p-1 rounded transition-colors',
+              test ? 'text-indigo-500 hover:text-indigo-600' : 'text-gray-200 hover:text-indigo-400',
+            )}
+          >
+            <FlaskConical className="w-3.5 h-3.5" />
+          </button>
+          <ChevronRight className="w-4 h-4 text-gray-300 ml-1" />
+        </div>
       </td>
     </tr>
   );
 }
 
-export function EnterpriseTable({ enterprises, from, to }: EnterpriseTableProps) {
+export function EnterpriseTable({
+  enterprises,
+  from,
+  to,
+  importantCount = 0,
+  isImportant,
+  isTest,
+  toggleImportant,
+  toggleTest,
+  onFailureReport,
+}: EnterpriseTableProps) {
   return (
     <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
       <table className="w-full text-sm">
@@ -193,12 +259,33 @@ export function EnterpriseTable({ enterprises, from, to }: EnterpriseTableProps)
             <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Succeeded</th>
             <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Failed</th>
             <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Success %</th>
-            <th className="w-8"></th>
+            <th className="w-24"></th>
           </tr>
         </thead>
         <tbody className="divide-y divide-gray-50">
-          {enterprises.map((e) => (
-            <EnterpriseRow key={e.ssoEnterpriseId} enterprise={e} from={from} to={to} />
+          {enterprises.map((e, idx) => (
+            <Fragment key={e.ssoEnterpriseId}>
+              <EnterpriseRow
+                enterprise={e}
+                from={from}
+                to={to}
+                isImportant={isImportant}
+                isTest={isTest}
+                toggleImportant={toggleImportant}
+                toggleTest={toggleTest}
+                onFailureReport={onFailureReport}
+              />
+              {/* Divider after important section */}
+              {importantCount > 0 && idx === importantCount - 1 && idx < enterprises.length - 1 && (
+                <tr className="bg-gray-50">
+                  <td colSpan={11} className="px-4 py-1.5">
+                    <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">
+                      Other enterprises
+                    </span>
+                  </td>
+                </tr>
+              )}
+            </Fragment>
           ))}
         </tbody>
       </table>

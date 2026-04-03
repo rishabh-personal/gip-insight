@@ -209,10 +209,10 @@ export class DipJobsService {
       opts.ssoEnterpriseId, dbName, opts.from, opts.to,
     );
 
-    let failedPairs = byPair.filter((p) => {
-      const inv = byInvoice.get(p.refDocNo);
-      return !inv?.hasSuccess && p.hasFailed && !p.hasPendingOnly;
-    });
+    // p.hasFailed already means: this connector failed AND never succeeded for this invoice.
+    // Do NOT filter by inv.hasSuccess — that would hide a connector failure just because
+    // another connector delivered the same invoice successfully.
+    let failedPairs = byPair.filter((p) => p.hasFailed && !p.hasPendingOnly);
 
     if (opts.connectorId) {
       failedPairs = failedPairs.filter(
@@ -260,8 +260,10 @@ export class DipJobsService {
       ssoEnterpriseId, dbName, from, to,
     );
 
+    // Count any invoice that has at least one connector-level failure, regardless of
+    // whether another connector delivered the same invoice successfully.
     const failedInvoiceIds = [...byInvoice.entries()]
-      .filter(([, v]) => !v.hasSuccess && v.hasAnyFailed && !v.hasPendingOnly)
+      .filter(([, v]) => v.hasAnyFailed && !v.hasPendingOnly)
       .map(([id]) => id);
 
     const count = failedInvoiceIds.length;

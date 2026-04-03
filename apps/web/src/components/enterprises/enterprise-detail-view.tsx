@@ -114,8 +114,11 @@ function ConnectorCard({ connector: c, onViewJobs }: { connector: any; onViewJob
   const statusBadge = isDeleted ? 'danger' : c.isEnabled ? 'success' : 'warning';
   const statusLabel = isDeleted ? 'Deleted' : c.isEnabled ? 'Active' : 'Disabled';
 
+  const hasEventMetrics = c.mappings?.some((mp: any) => mp.metrics !== null);
+
   return (
     <div className="bg-white rounded-xl border border-gray-200 p-4">
+      {/* Connector header row */}
       <div className="flex items-start justify-between">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
@@ -128,21 +131,25 @@ function ConnectorCard({ connector: c, onViewJobs }: { connector: any; onViewJob
             <span className="font-medium">{c.inboundApp?.name || 'Unknown'}</span>
           </div>
         </div>
+
+        {/* Connector-level summary stats */}
         <div className="flex items-center gap-6 ml-4">
           <div className="text-center">
-            <p className="text-xs text-gray-400">Jobs</p>
-            <p className="font-semibold text-gray-800">{m.total_jobs ?? 0}</p>
-          </div>
-          <div className="text-center">
-            <p className="text-xs text-gray-400">Pending</p>
-            <p className={cn('font-semibold', (m.pending ?? 0) > 0 ? 'text-yellow-600' : 'text-gray-400')}>
-              {m.pending ?? 0}
+            <p className="text-xs text-gray-400">Succeeded</p>
+            <p className={cn('font-semibold', (m.succeeded ?? 0) > 0 ? 'text-green-600' : 'text-gray-400')}>
+              {m.succeeded ?? 0}
             </p>
           </div>
           <div className="text-center">
             <p className="text-xs text-gray-400">Failed</p>
             <p className={cn('font-semibold', (m.failed ?? 0) > 0 ? 'text-red-600' : 'text-gray-400')}>
               {m.failed ?? 0}
+            </p>
+          </div>
+          <div className="text-center">
+            <p className="text-xs text-gray-400">Pending</p>
+            <p className={cn('font-semibold', (m.pending ?? 0) > 0 ? 'text-yellow-600' : 'text-gray-400')}>
+              {m.pending ?? 0}
             </p>
           </div>
           <div className="text-center">
@@ -167,19 +174,84 @@ function ConnectorCard({ connector: c, onViewJobs }: { connector: any; onViewJob
         </div>
       </div>
 
-      {/* Event mappings */}
+      {/* Event-wise breakdown table */}
       {c.mappings?.length > 0 && (
-        <div className="mt-3 pt-3 border-t border-gray-50">
-          <div className="flex flex-wrap gap-2">
-            {c.mappings.map((m: any, i: number) => (
-              <div key={i} className="flex items-center gap-1 text-xs text-gray-500 bg-gray-50 px-2 py-1 rounded-md">
-                <span className="font-mono text-gray-600">{m.outboundEvent?.eventCode || '?'}</span>
-                <span>→</span>
-                <span className="font-mono text-gray-600">{m.inboundEvent?.eventCode || '?'}</span>
-                {!m.isEnabled && <span className="text-yellow-500 ml-1">(off)</span>}
-              </div>
-            ))}
-          </div>
+        <div className="mt-3 pt-3 border-t border-gray-100">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-gray-400 text-left">
+                <th className="pb-1.5 font-medium">Event</th>
+                <th className="pb-1.5 font-medium text-right pr-4">Succeeded</th>
+                <th className="pb-1.5 font-medium text-right pr-4">Failed</th>
+                <th className="pb-1.5 font-medium text-right pr-4">Pending</th>
+                <th className="pb-1.5 font-medium text-right">Success %</th>
+                <th className="pb-1.5 w-16"></th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-50">
+              {c.mappings.map((mp: any) => {
+                const em = mp.metrics;
+                return (
+                  <tr key={mp._id} className="text-gray-700">
+                    <td className="py-1.5 pr-4">
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-mono text-gray-600 bg-gray-50 px-1.5 py-0.5 rounded text-[11px]">
+                          {mp.outboundEvent?.eventCode || '?'}
+                        </span>
+                        <span className="text-gray-300">→</span>
+                        <span className="font-mono text-gray-600 bg-gray-50 px-1.5 py-0.5 rounded text-[11px]">
+                          {mp.inboundEvent?.eventCode || '?'}
+                        </span>
+                        {!mp.isEnabled && (
+                          <span className="text-[10px] text-yellow-500 font-medium">(off)</span>
+                        )}
+                        {mp.isRetryable && (
+                          <span className="text-[10px] text-blue-400 font-medium">retryable</span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="py-1.5 pr-4 text-right">
+                      {em
+                        ? <span className={cn('font-medium', em.succeeded > 0 ? 'text-green-600' : 'text-gray-400')}>{em.succeeded}</span>
+                        : <span className="text-gray-300">—</span>}
+                    </td>
+                    <td className="py-1.5 pr-4 text-right">
+                      {em
+                        ? <span className={cn('font-medium', em.failed > 0 ? 'text-red-600' : 'text-gray-400')}>{em.failed}</span>
+                        : <span className="text-gray-300">—</span>}
+                    </td>
+                    <td className="py-1.5 pr-4 text-right">
+                      {em
+                        ? <span className={cn('font-medium', em.pending > 0 ? 'text-yellow-600' : 'text-gray-400')}>{em.pending}</span>
+                        : <span className="text-gray-300">—</span>}
+                    </td>
+                    <td className="py-1.5 text-right">
+                      {em
+                        ? <span className={cn(
+                            'font-semibold',
+                            em.success_rate >= 98 ? 'text-green-600' :
+                            em.success_rate >= 90 ? 'text-yellow-600' :
+                            'text-red-600',
+                          )}>{em.success_rate}%</span>
+                        : <span className="text-gray-300">—</span>}
+                    </td>
+                    <td className="py-1.5 pl-3 text-right">
+                      {!mp.isEnabled
+                        ? <span className="text-[10px] px-1.5 py-0.5 bg-yellow-50 text-yellow-600 rounded font-medium">Disabled</span>
+                        : em?.failed > 0
+                          ? <span className="text-[10px] px-1.5 py-0.5 bg-red-50 text-red-600 rounded font-medium">Failing</span>
+                          : em?.succeeded > 0
+                            ? <span className="text-[10px] px-1.5 py-0.5 bg-green-50 text-green-600 rounded font-medium">Healthy</span>
+                            : null}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          {!hasEventMetrics && (
+            <p className="text-xs text-gray-400 mt-1">No jobs found for this window</p>
+          )}
         </div>
       )}
     </div>
