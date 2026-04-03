@@ -291,9 +291,9 @@ export function JobDetailView({ jobId }: { jobId: string }) {
   const [orderedTasks] = buildTree(tasks);
 
   return (
-    <div className="flex gap-5 h-full">
+    <div className="flex flex-col lg:flex-row gap-5">
       {/* ── Main column ── */}
-      <div className={cn('flex-1 min-w-0 space-y-5', selectedTask && 'max-w-[calc(100%-360px)]')}>
+      <div className={cn('flex-1 min-w-0 space-y-5', selectedTask && 'lg:max-w-[calc(100%-360px)]')}>
         {/* Breadcrumb */}
         <div className="flex items-center gap-2 text-sm text-gray-500">
           <button onClick={() => router.back()} className="flex items-center gap-1 hover:text-gray-700">
@@ -313,7 +313,7 @@ export function JobDetailView({ jobId }: { jobId: string }) {
                 <Badge variant={statusVariant[job.status] || 'muted'}>{job.status}</Badge>
                 {!job.isRetryable && <Badge variant="muted">Non-retryable</Badge>}
               </div>
-              <div className="grid grid-cols-2 gap-x-8 gap-y-1 text-xs text-gray-500">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-1 text-xs text-gray-500">
                 <div><span className="text-gray-400">RefDoc: </span><span className="font-mono text-gray-700">{job.refDocNo || '—'}</span></div>
                 <div><span className="text-gray-400">Enterprise: </span><span>{job.enterprise?.tradeName || job.ssoEnterpriseId}</span></div>
                 <div><span className="text-gray-400">Connector: </span><span>{job.connector?.name || '—'}</span></div>
@@ -377,7 +377,7 @@ export function JobDetailView({ jobId }: { jobId: string }) {
 
       {/* ── Side panel ── */}
       {selectedTask && (
-        <div className="w-[360px] shrink-0 bg-white rounded-xl border border-gray-200 overflow-hidden flex flex-col sticky top-0 max-h-[calc(100vh-120px)]">
+        <div className="w-full lg:w-[360px] lg:shrink-0 bg-white rounded-xl border border-gray-200 overflow-hidden flex flex-col lg:sticky lg:top-0 lg:max-h-[calc(100vh-120px)]">
           <TaskSidePanel
             task={selectedTask}
             onClose={() => setSelectedTask(null)}

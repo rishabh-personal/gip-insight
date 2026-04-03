@@ -4,7 +4,8 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { cn } from '@/lib/utils';
 import {
-  Building2, AlertCircle, Search, Activity, Zap, ChevronLeft, ChevronRight,
+  Building2, AlertCircle, Search, Activity, Zap,
+  ChevronLeft, ChevronRight,
 } from 'lucide-react';
 
 const navItems = [
@@ -18,6 +19,8 @@ interface SidebarProps {
   onToggle: () => void;
 }
 
+// ── Desktop sidebar (hidden on mobile) ───────────────────────────────────────
+
 export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const pathname = usePathname();
 
@@ -26,6 +29,8 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
       className={cn(
         'fixed inset-y-0 left-0 bg-white border-r border-gray-200 flex flex-col z-30',
         'transition-[width] duration-200 overflow-hidden',
+        /* Hide entirely on small screens; show on md+ */
+        'hidden md:flex',
         collapsed ? 'w-14' : 'w-60',
       )}
     >
@@ -34,22 +39,16 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center flex-shrink-0">
           <Zap className="w-4 h-4 text-white" />
         </div>
-
-        {/* Title — hidden when collapsed */}
         <div className={cn('flex-1 min-w-0 transition-opacity duration-150', collapsed ? 'opacity-0 pointer-events-none' : 'opacity-100')}>
           <p className="text-sm font-semibold text-gray-900 truncate">GIP Insight</p>
           <p className="text-xs text-gray-500 truncate">Sync Dashboard</p>
         </div>
-
-        {/* Toggle button */}
         <button
           onClick={onToggle}
           aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           className="flex-shrink-0 w-6 h-6 flex items-center justify-center rounded-md text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors"
         >
-          {collapsed
-            ? <ChevronRight className="w-3.5 h-3.5" />
-            : <ChevronLeft  className="w-3.5 h-3.5" />}
+          {collapsed ? <ChevronRight className="w-3.5 h-3.5" /> : <ChevronLeft className="w-3.5 h-3.5" />}
         </button>
       </div>
 
@@ -65,17 +64,10 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
               className={cn(
                 'flex items-center rounded-lg text-sm transition-colors group',
                 collapsed ? 'justify-center px-0 py-2.5' : 'gap-3 px-3 py-2.5',
-                active
-                  ? 'bg-indigo-50 text-indigo-700 font-medium'
-                  : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50',
+                active ? 'bg-indigo-50 text-indigo-700 font-medium' : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50',
               )}
             >
-              <item.icon
-                className={cn(
-                  'w-4 h-4 flex-shrink-0',
-                  active ? 'text-indigo-600' : 'text-gray-400 group-hover:text-gray-600',
-                )}
-              />
+              <item.icon className={cn('w-4 h-4 flex-shrink-0', active ? 'text-indigo-600' : 'text-gray-400 group-hover:text-gray-600')} />
               {!collapsed && <span className="truncate">{item.label}</span>}
             </Link>
           );
@@ -85,10 +77,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
       {/* Footer */}
       <div className="p-2 border-t border-gray-200">
         <div
-          className={cn(
-            'flex items-center rounded-lg px-3 py-2',
-            collapsed ? 'justify-center px-0' : 'gap-2',
-          )}
+          className={cn('flex items-center rounded-lg px-3 py-2', collapsed ? 'justify-center px-0' : 'gap-2')}
           title={collapsed ? 'Production' : undefined}
         >
           <Activity className="w-3.5 h-3.5 text-green-500 flex-shrink-0" />
@@ -96,5 +85,32 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         </div>
       </div>
     </aside>
+  );
+}
+
+// ── Mobile bottom nav (shown only on small screens) ───────────────────────────
+
+export function MobileBottomNav() {
+  const pathname = usePathname();
+
+  return (
+    <nav className="fixed bottom-0 inset-x-0 bg-white border-t border-gray-200 z-40 flex md:hidden">
+      {navItems.map((item) => {
+        const active = pathname.startsWith(item.href);
+        return (
+          <Link
+            key={item.href}
+            href={item.href}
+            className={cn(
+              'flex-1 flex flex-col items-center justify-center gap-1 py-2.5 text-[10px] font-medium transition-colors',
+              active ? 'text-indigo-600' : 'text-gray-400',
+            )}
+          >
+            <item.icon className={cn('w-5 h-5', active ? 'text-indigo-600' : 'text-gray-400')} />
+            {item.label}
+          </Link>
+        );
+      })}
+    </nav>
   );
 }

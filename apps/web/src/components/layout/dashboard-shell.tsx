@@ -1,12 +1,11 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Sidebar } from './sidebar';
+import { Sidebar, MobileBottomNav } from './sidebar';
 
 const STORAGE_KEY = 'gip-sidebar-collapsed';
 
 export function DashboardShell({ children }: { children: React.ReactNode }) {
-  // Start expanded to avoid layout shift; sync from localStorage after mount
   const [collapsed, setCollapsed] = useState(false);
   const [mounted, setMounted] = useState(false);
 
@@ -28,16 +27,26 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="flex h-screen bg-gray-50">
+      {/* Desktop sidebar */}
       <Sidebar collapsed={collapsed} onToggle={toggle} />
-      {/* Margin transitions in sync with the sidebar width transition */}
+
+      {/*
+        Content area:
+        - Mobile (< md): full width, pb-16 for bottom nav clearance
+        - Desktop: margin matches sidebar width, transitions in sync
+      */}
       <div
         className={[
-          'flex-1 flex flex-col min-w-0 transition-[margin] duration-200',
-          mounted ? (collapsed ? 'ml-14' : 'ml-60') : 'ml-60',
+          'flex-1 flex flex-col min-w-0 pb-16 md:pb-0',
+          'md:transition-[margin] md:duration-200',
+          mounted ? (collapsed ? 'md:ml-14' : 'md:ml-60') : 'md:ml-60',
         ].join(' ')}
       >
         {children}
       </div>
+
+      {/* Mobile bottom nav */}
+      <MobileBottomNav />
     </div>
   );
 }

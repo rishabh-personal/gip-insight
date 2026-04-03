@@ -148,20 +148,20 @@ export function EnterpriseListView() {
       <div>
         <h2 className="text-xl font-semibold text-gray-900">Enterprises</h2>
         <p className="text-sm text-gray-500 mt-1">
-          Enterprises with active app integrations — metrics load per row
+          Active integrations — metrics load per row
         </p>
       </div>
 
       {/* KPI cards */}
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-2 gap-3">
         <StatCard label="Enterprises" value={enterprises.length} icon={Building2} color="default" />
-        <StatCard label="Unique Connectors" value={connectors.length} icon={Layers} color="default" sub="across all enterprises" />
+        <StatCard label="Connectors" value={connectors.length} icon={Layers} color="default" sub="across all" />
       </div>
 
       {/* ── Tab group: connector context (row 1) + sub-tabs (row 2) ── */}
       <div className="space-y-0">
-      {/* Row 1: connector context */}
-      <div className="flex items-center border-b border-gray-200">
+      {/* Row 1: connector context — horizontally scrollable on mobile */}
+      <div className="flex items-center border-b border-gray-200 overflow-x-auto scrollbar-hide">
         <button
           onClick={() => { setActiveConnectorName(''); setActiveSubTab('all'); }}
           className={cn(
@@ -255,8 +255,8 @@ export function EnterpriseListView() {
         </div>
       </div>
 
-      {/* Row 2: sub-tabs scoped to active connector */}
-      <div className="flex items-center gap-1 border-b border-gray-200 bg-gray-50/50">
+      {/* Row 2: sub-tabs scoped to active connector — scrollable on mobile */}
+      <div className="flex items-center gap-1 border-b border-gray-200 bg-gray-50/50 overflow-x-auto scrollbar-hide">
         {([
           { key: 'all',       label: 'All',            icon: null },
           { key: 'attention', label: 'Needs Attention', icon: AlertTriangle },
@@ -292,14 +292,14 @@ export function EnterpriseListView() {
 
       {/* Search + count */}
       <div className="flex items-center gap-3">
-        <div className="relative">
+        <div className="relative flex-1 sm:flex-none">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
           <input
             type="text"
             placeholder="Search enterprise…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="pl-8 pr-8 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-300 bg-white w-56"
+            className="pl-8 pr-8 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-300 bg-white w-full sm:w-56"
           />
           {search && (
             <button
@@ -311,7 +311,7 @@ export function EnterpriseListView() {
           )}
         </div>
 
-        <span className="ml-auto text-xs text-gray-400">
+        <span className="ml-auto text-xs text-gray-400 whitespace-nowrap">
           {visibleEnterprises.length} enterprise{visibleEnterprises.length !== 1 ? 's' : ''}
         </span>
       </div>
