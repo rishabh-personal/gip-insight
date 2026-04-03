@@ -9,20 +9,27 @@ export class EnterprisesController {
   constructor(private readonly svc: EnterprisesService) {}
 
   @Get()
-  @ApiOperation({ summary: 'List enterprises that have private apps in apps collection — fast, no metrics (STORY-001)' })
+  @ApiOperation({ summary: 'List enterprises that have private apps in apps collection — fast, no metrics' })
   @ApiQuery({ name: 'search', required: false })
-  @ApiQuery({ name: 'appName', required: false })
+  @ApiQuery({ name: 'connectorName', required: false, description: 'Filter to enterprises that have this exact connector name' })
   async list(
     @Query('search') search?: string,
-    @Query('appName') appName?: string,
+    @Query('connectorName') connectorName?: string,
   ): Promise<any> {
-    return this.svc.listEnterpriseStubs({ search, appName });
+    return this.svc.listEnterpriseStubs({ search, connectorName });
   }
 
   @Get('apps')
   @ApiOperation({ summary: 'List all unique apps used across connectors (for filter dropdown)' })
   async apps(): Promise<any> {
     const data = await this.svc.listApps();
+    return { data };
+  }
+
+  @Get('connectors')
+  @ApiOperation({ summary: 'List all unique connector names (for pin-as-tab dropdown)' })
+  async connectors(): Promise<any> {
+    const data = await this.svc.listConnectors();
     return { data };
   }
 

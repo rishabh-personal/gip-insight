@@ -7,6 +7,7 @@ import { Connector, ConnectorSchema } from '../schemas/connector.schema';
 import { ConnectorEventMapping, ConnectorEventMappingSchema } from '../schemas/connector-event-mapping.schema';
 import { AppCatalog, AppCatalogSchema } from '../schemas/app-catalog.schema';
 import { EventCatalog, EventCatalogSchema } from '../schemas/event-catalog.schema';
+import { DipJob, DipJobSchema } from '../schemas/dip-job.schema';
 import { CommonModule } from '../common/common.module';
 
 @Module({
@@ -17,7 +18,7 @@ import { CommonModule } from '../common/common.module';
       { name: ConnectorEventMapping.name, schema: ConnectorEventMappingSchema },
       { name: AppCatalog.name, schema: AppCatalogSchema },
       { name: EventCatalog.name, schema: EventCatalogSchema },
-      // DipJob removed: consumed via ZwingStatusService from CommonModule
+      { name: DipJob.name, schema: DipJobSchema },
     ]),
     CommonModule,
   ],

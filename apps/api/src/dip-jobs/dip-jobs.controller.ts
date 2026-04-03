@@ -1,12 +1,16 @@
-import { Controller, Get, Param, Query } from '@nestjs/common';
+import { Controller, Get, Param, Query, BadRequestException } from '@nestjs/common';
 import { ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { DipJobsService } from './dip-jobs.service';
+import { BlobService } from '../common/blob.service';
 import { PaginationDto } from '../common/dto/pagination.dto';
 
 @ApiTags('Jobs')
 @Controller('api/dashboard')
 export class DipJobsController {
-  constructor(private readonly svc: DipJobsService) {}
+  constructor(
+    private readonly svc: DipJobsService,
+    private readonly blob: BlobService,
+  ) {}
 
   @Get('enterprises/:ssoEnterpriseId/jobs/summary')
   @ApiOperation({ summary: 'Job status summary for an enterprise (STORY-004)' })
@@ -48,6 +52,15 @@ export class DipJobsController {
       ssoEnterpriseId,
       connectorId,
     });
+  }
+
+  @Get('jobs/blob')
+  @ApiOperation({ summary: 'Read task input/output payload from Azure Blob Storage' })
+  @ApiQuery({ name: 'path', required: true, description: 'Blob path (inputDataPath or outputDataPath from DipJobTask)' })
+  async blobContent(@Query('path') path: string) {
+    if (!path) throw new BadRequestException('path query param required');
+    const data = await this.blob.read(path);
+    return { data };
   }
 
   @Get('jobs/:jobId')

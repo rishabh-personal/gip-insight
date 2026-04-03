@@ -16,6 +16,10 @@ export const getEnterprises = (params: Record<string, any> = {}) =>
 export const getEnterpriseApps = () =>
   api.get('/enterprises/apps').then((r) => r.data);
 
+/** Unique connector names across all enterprises — for the pin-as-tab dropdown. */
+export const getEnterpriseConnectors = () =>
+  api.get('/enterprises/connectors').then((r) => r.data);
+
 /** Async per-enterprise metrics (jobs, sync gap) — call per row. */
 export const getEnterpriseMetrics = (ssoEnterpriseId: string, params: Record<string, any> = {}) =>
   api.get(`/enterprises/${ssoEnterpriseId}/metrics`, { params }).then((r) => r.data);
@@ -48,6 +52,10 @@ export const getFailedJobs = (params: Record<string, any> = {}) =>
 
 export const getJobDetail = (jobId: string) =>
   api.get(`/jobs/${jobId}`).then((r) => r.data);
+
+/** Fetch task input or output payload from Azure Blob Storage via the API proxy. */
+export const getBlobContent = (path: string) =>
+  api.get('/jobs/blob', { params: { path } }).then((r) => r.data);
 
 
 // ---- Trace ----
