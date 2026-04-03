@@ -39,39 +39,38 @@ export function EnterpriseDetailView({ ssoEnterpriseId }: { ssoEnterpriseId: str
       </div>
 
       {/* Enterprise header */}
-      <div className="bg-white rounded-xl border border-gray-200 p-5">
-        <div className="flex items-start justify-between">
-          <div>
-            <h2 className="text-lg font-semibold text-gray-900">{enterprise?.tradeName}</h2>
-            <p className="text-sm text-gray-500 mt-0.5">{enterprise?.legalName}</p>
-            <div className="flex items-center gap-4 mt-3">
-              <div className="flex items-center gap-1.5 text-xs text-gray-500">
-                <GitBranch className="w-3.5 h-3.5" />
-                <span className="font-mono">{enterprise?.ssoEnterpriseId}</span>
+      <div className="bg-white rounded-xl border border-gray-200 p-4 md:p-5">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h2 className="text-lg font-semibold text-gray-900 truncate">{enterprise?.tradeName}</h2>
+            <p className="text-sm text-gray-500 mt-0.5 truncate">{enterprise?.legalName}</p>
+            <div className="flex flex-wrap items-center gap-2 mt-2">
+              <div className="flex items-center gap-1 text-xs text-gray-500">
+                <GitBranch className="w-3 h-3 shrink-0" />
+                <span className="font-mono truncate max-w-[140px] sm:max-w-none">{enterprise?.ssoEnterpriseId}</span>
               </div>
               {enterprise?.dbName && (
-                <div className="flex items-center gap-1.5 text-xs text-gray-500">
-                  <Database className="w-3.5 h-3.5" />
-                  <span className="font-mono">{enterprise?.dbName}</span>
+                <div className="flex items-center gap-1 text-xs text-gray-500">
+                  <Database className="w-3 h-3 shrink-0" />
+                  <span className="font-mono truncate max-w-[120px] sm:max-w-none">{enterprise?.dbName}</span>
                 </div>
               )}
-              {enterprise?.baCode && (
-                <Badge variant="muted">{enterprise?.baCode}</Badge>
-              )}
+              {enterprise?.baCode && <Badge variant="muted">{enterprise?.baCode}</Badge>}
             </div>
           </div>
           <Link
             href={`/enterprises/${ssoEnterpriseId}/sync-gap?from=${from}&to=${to}`}
-            className="flex items-center gap-1.5 text-sm text-indigo-600 hover:text-indigo-800 font-medium"
+            className="flex items-center gap-1.5 text-xs sm:text-sm text-indigo-600 hover:text-indigo-800 font-medium shrink-0"
           >
             <Activity className="w-4 h-4" />
-            Sync Gap Analysis
+            <span className="hidden sm:inline">Sync Gap Analysis</span>
+            <span className="sm:hidden">Sync Gap</span>
           </Link>
         </div>
       </div>
 
       {/* Job metrics — all values are invoice-level, not raw job counts */}
-      <div className="grid grid-cols-6 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         <StatCard label="Zwing Invoices" value={totals.total ?? 0} color="default" sub="in selected window" />
         <StatCard label="Succeeded" value={totals.success ?? 0} color="green" sub="delivered successfully" />
         <StatCard label="Failed" value={totals.failed ?? 0} color={(totals.failed ?? 0) > 0 ? 'red' : 'default'} sub="no success for any connector" />
@@ -118,10 +117,10 @@ function ConnectorCard({ connector: c, onViewJobs }: { connector: any; onViewJob
 
   return (
     <div className="bg-white rounded-xl border border-gray-200 p-4">
-      {/* Connector header row */}
-      <div className="flex items-start justify-between">
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
+      {/* Connector name + badge */}
+      <div className="flex items-start justify-between gap-2 mb-3">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
             <p className="font-medium text-gray-900 text-sm">{c.name}</p>
             <Badge variant={statusBadge}>{statusLabel}</Badge>
           </div>
@@ -131,61 +130,63 @@ function ConnectorCard({ connector: c, onViewJobs }: { connector: any; onViewJob
             <span className="font-medium">{c.inboundApp?.name || 'Unknown'}</span>
           </div>
         </div>
+        {m.failed > 0 && (
+          <button
+            onClick={onViewJobs}
+            className="flex items-center gap-1 text-xs text-red-600 hover:text-red-800 font-medium shrink-0"
+          >
+            <AlertCircle className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">View Failures</span>
+            <span className="sm:hidden">Failures</span>
+          </button>
+        )}
+      </div>
 
-        {/* Connector-level summary stats */}
-        <div className="flex items-center gap-6 ml-4">
-          <div className="text-center">
-            <p className="text-xs text-gray-400">Succeeded</p>
-            <p className={cn('font-semibold', (m.succeeded ?? 0) > 0 ? 'text-green-600' : 'text-gray-400')}>
-              {m.succeeded ?? 0}
-            </p>
-          </div>
-          <div className="text-center">
-            <p className="text-xs text-gray-400">Failed</p>
-            <p className={cn('font-semibold', (m.failed ?? 0) > 0 ? 'text-red-600' : 'text-gray-400')}>
-              {m.failed ?? 0}
-            </p>
-          </div>
-          <div className="text-center">
-            <p className="text-xs text-gray-400">Pending</p>
-            <p className={cn('font-semibold', (m.pending ?? 0) > 0 ? 'text-yellow-600' : 'text-gray-400')}>
-              {m.pending ?? 0}
-            </p>
-          </div>
-          <div className="text-center">
-            <p className="text-xs text-gray-400">Success %</p>
-            <p className={cn(
-              'font-semibold text-sm',
-              (m.success_rate ?? 0) >= 98 ? 'text-green-600' :
-              (m.success_rate ?? 0) >= 90 ? 'text-yellow-600' :
-              'text-red-600',
-            )}>
-              {m.success_rate ?? 0}%
-            </p>
-          </div>
-          {m.failed > 0 && (
-            <button
-              onClick={onViewJobs}
-              className="flex items-center gap-1 text-xs text-red-600 hover:text-red-800 font-medium"
-            >
-              <AlertCircle className="w-3.5 h-3.5" /> View Failures
-            </button>
-          )}
+      {/* Connector-level summary stats — 4-col grid on all sizes */}
+      <div className="grid grid-cols-4 gap-2 text-center mb-1">
+        <div>
+          <p className="text-[10px] text-green-500 mb-0.5">Succeeded</p>
+          <p className={cn('text-sm font-semibold', (m.succeeded ?? 0) > 0 ? 'text-green-600' : 'text-gray-400')}>
+            {m.succeeded ?? 0}
+          </p>
+        </div>
+        <div>
+          <p className="text-[10px] text-red-400 mb-0.5">Failed</p>
+          <p className={cn('text-sm font-semibold', (m.failed ?? 0) > 0 ? 'text-red-600' : 'text-gray-400')}>
+            {m.failed ?? 0}
+          </p>
+        </div>
+        <div>
+          <p className="text-[10px] text-yellow-500 mb-0.5">Pending</p>
+          <p className={cn('text-sm font-semibold', (m.pending ?? 0) > 0 ? 'text-yellow-600' : 'text-gray-400')}>
+            {m.pending ?? 0}
+          </p>
+        </div>
+        <div>
+          <p className="text-[10px] text-gray-400 mb-0.5">Success %</p>
+          <p className={cn(
+            'text-sm font-semibold',
+            (m.success_rate ?? 0) >= 98 ? 'text-green-600' :
+            (m.success_rate ?? 0) >= 90 ? 'text-yellow-600' :
+            'text-red-600',
+          )}>
+            {m.success_rate ?? 0}%
+          </p>
         </div>
       </div>
 
-      {/* Event-wise breakdown table */}
+      {/* Event-wise breakdown table — horizontally scrollable */}
       {c.mappings?.length > 0 && (
-        <div className="mt-3 pt-3 border-t border-gray-100">
-          <table className="w-full text-xs">
+        <div className="mt-3 pt-3 border-t border-gray-100 overflow-x-auto">
+          <table className="w-full text-xs min-w-[480px]">
             <thead>
               <tr className="text-gray-400 text-left">
                 <th className="pb-1.5 font-medium">Event</th>
-                <th className="pb-1.5 font-medium text-right pr-4">Succeeded</th>
-                <th className="pb-1.5 font-medium text-right pr-4">Failed</th>
-                <th className="pb-1.5 font-medium text-right pr-4">Pending</th>
-                <th className="pb-1.5 font-medium text-right">Success %</th>
-                <th className="pb-1.5 w-16"></th>
+                <th className="pb-1.5 font-medium text-right pr-3">OK</th>
+                <th className="pb-1.5 font-medium text-right pr-3">Fail</th>
+                <th className="pb-1.5 font-medium text-right pr-3">Pend</th>
+                <th className="pb-1.5 font-medium text-right">Rate</th>
+                <th className="pb-1.5 w-14"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-50">
@@ -193,55 +194,40 @@ function ConnectorCard({ connector: c, onViewJobs }: { connector: any; onViewJob
                 const em = mp.metrics;
                 return (
                   <tr key={mp._id} className="text-gray-700">
-                    <td className="py-1.5 pr-4">
-                      <div className="flex items-center gap-1.5">
-                        <span className="font-mono text-gray-600 bg-gray-50 px-1.5 py-0.5 rounded text-[11px]">
+                    <td className="py-1.5 pr-3">
+                      <div className="space-y-0.5">
+                        <span className="font-mono text-gray-600 bg-gray-50 px-1.5 py-0.5 rounded text-[10px] block truncate max-w-[180px]">
                           {mp.outboundEvent?.eventCode || '?'}
                         </span>
-                        <span className="text-gray-300">→</span>
-                        <span className="font-mono text-gray-600 bg-gray-50 px-1.5 py-0.5 rounded text-[11px]">
-                          {mp.inboundEvent?.eventCode || '?'}
+                        <span className="font-mono text-gray-400 bg-gray-50 px-1.5 py-0.5 rounded text-[10px] block truncate max-w-[180px]">
+                          → {mp.inboundEvent?.eventCode || '?'}
                         </span>
-                        {!mp.isEnabled && (
-                          <span className="text-[10px] text-yellow-500 font-medium">(off)</span>
-                        )}
-                        {mp.isRetryable && (
-                          <span className="text-[10px] text-blue-400 font-medium">retryable</span>
-                        )}
+                        {!mp.isEnabled && <span className="text-[10px] text-yellow-500 font-medium">off</span>}
                       </div>
                     </td>
-                    <td className="py-1.5 pr-4 text-right">
-                      {em
-                        ? <span className={cn('font-medium', em.succeeded > 0 ? 'text-green-600' : 'text-gray-400')}>{em.succeeded}</span>
-                        : <span className="text-gray-300">—</span>}
+                    <td className="py-1.5 pr-3 text-right">
+                      {em ? <span className={cn('font-medium', em.succeeded > 0 ? 'text-green-600' : 'text-gray-400')}>{em.succeeded}</span> : <span className="text-gray-300">—</span>}
                     </td>
-                    <td className="py-1.5 pr-4 text-right">
-                      {em
-                        ? <span className={cn('font-medium', em.failed > 0 ? 'text-red-600' : 'text-gray-400')}>{em.failed}</span>
-                        : <span className="text-gray-300">—</span>}
+                    <td className="py-1.5 pr-3 text-right">
+                      {em ? <span className={cn('font-medium', em.failed > 0 ? 'text-red-600' : 'text-gray-400')}>{em.failed}</span> : <span className="text-gray-300">—</span>}
                     </td>
-                    <td className="py-1.5 pr-4 text-right">
-                      {em
-                        ? <span className={cn('font-medium', em.pending > 0 ? 'text-yellow-600' : 'text-gray-400')}>{em.pending}</span>
-                        : <span className="text-gray-300">—</span>}
+                    <td className="py-1.5 pr-3 text-right">
+                      {em ? <span className={cn('font-medium', em.pending > 0 ? 'text-yellow-600' : 'text-gray-400')}>{em.pending}</span> : <span className="text-gray-300">—</span>}
                     </td>
                     <td className="py-1.5 text-right">
-                      {em
-                        ? <span className={cn(
-                            'font-semibold',
-                            em.success_rate >= 98 ? 'text-green-600' :
-                            em.success_rate >= 90 ? 'text-yellow-600' :
-                            'text-red-600',
-                          )}>{em.success_rate}%</span>
-                        : <span className="text-gray-300">—</span>}
+                      {em ? (
+                        <span className={cn('font-semibold', em.success_rate >= 98 ? 'text-green-600' : em.success_rate >= 90 ? 'text-yellow-600' : 'text-red-600')}>
+                          {em.success_rate}%
+                        </span>
+                      ) : <span className="text-gray-300">—</span>}
                     </td>
-                    <td className="py-1.5 pl-3 text-right">
+                    <td className="py-1.5 pl-2 text-right">
                       {!mp.isEnabled
-                        ? <span className="text-[10px] px-1.5 py-0.5 bg-yellow-50 text-yellow-600 rounded font-medium">Disabled</span>
+                        ? <span className="text-[10px] px-1.5 py-0.5 bg-yellow-50 text-yellow-600 rounded font-medium">Off</span>
                         : em?.failed > 0
-                          ? <span className="text-[10px] px-1.5 py-0.5 bg-red-50 text-red-600 rounded font-medium">Failing</span>
+                          ? <span className="text-[10px] px-1.5 py-0.5 bg-red-50 text-red-600 rounded font-medium">Fail</span>
                           : em?.succeeded > 0
-                            ? <span className="text-[10px] px-1.5 py-0.5 bg-green-50 text-green-600 rounded font-medium">Healthy</span>
+                            ? <span className="text-[10px] px-1.5 py-0.5 bg-green-50 text-green-600 rounded font-medium">OK</span>
                             : null}
                     </td>
                   </tr>
