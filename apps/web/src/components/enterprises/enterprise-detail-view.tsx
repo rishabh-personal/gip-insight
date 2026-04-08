@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
@@ -9,7 +10,10 @@ import { cn } from '@/lib/utils';
 import { PageLoader, ErrorState, EmptyState } from '@/components/ui/loading';
 import { StatCard } from '@/components/ui/stat-card';
 import { Badge } from '@/components/ui/badge';
-import { ChevronRight, AlertCircle, Activity, ArrowLeft, GitBranch, Database } from 'lucide-react';
+import {
+  ChevronRight, ChevronDown, ChevronUp, AlertCircle, Activity, ArrowLeft, GitBranch, Database,
+  Copy, Check, ExternalLink,
+} from 'lucide-react';
 
 export function EnterpriseDetailView({ ssoEnterpriseId }: { ssoEnterpriseId: string }) {
   const router = useRouter();
@@ -95,6 +99,7 @@ export function EnterpriseDetailView({ ssoEnterpriseId }: { ssoEnterpriseId: str
               <ConnectorCard
                 key={c._id}
                 connector={c}
+                ssoEnterpriseId={ssoEnterpriseId}
                 onViewJobs={() =>
                   router.push(`/jobs?ssoEnterpriseId=${ssoEnterpriseId}&connectorId=${c._id}&from=${from}&to=${to}`)
                 }
@@ -107,8 +112,44 @@ export function EnterpriseDetailView({ ssoEnterpriseId }: { ssoEnterpriseId: str
   );
 }
 
-function ConnectorCard({ connector: c, onViewJobs }: { connector: any; onViewJobs: () => void }) {
+function CopyIconButton({ text, title }: { text: string; title?: string }) {
+  const [ok, setOk] = useState(false);
+  return (
+    <button
+      type="button"
+      title={title || 'Copy'}
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(text);
+          setOk(true);
+          setTimeout(() => setOk(false), 1500);
+        } catch {
+          /* ignore */
+        }
+      }}
+      className="p-1 rounded text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
+    >
+      {ok ? <Check className="w-3 h-3 text-green-600" /> : <Copy className="w-3 h-3" />}
+    </button>
+  );
+}
+
+function ConnectorCard({
+  connector: c,
+  ssoEnterpriseId,
+  onViewJobs,
+}: {
+  connector: any;
+  ssoEnterpriseId: string;
+  onViewJobs: () => void;
+}) {
   const m = c.metrics || {};
+  const missingList: string[] = m.missingRefDocNos ?? [];
+  const missingTruncated = !!m.missingRefDocNosTruncated;
+  const [missingOpen, setMissingOpen] = useState(
+    () => (m.missing ?? 0) > 0 && (m.missing ?? 0) <= 20,
+  );
+
   const isDeleted = !!c.deletedOn;
   const statusBadge = isDeleted ? 'danger' : c.isEnabled ? 'success' : 'warning';
   const statusLabel = isDeleted ? 'Deleted' : c.isEnabled ? 'Active' : 'Disabled';
@@ -130,20 +171,43 @@ function ConnectorCard({ connector: c, onViewJobs }: { connector: any; onViewJob
             <span className="font-medium">{c.inboundApp?.name || 'Unknown'}</span>
           </div>
         </div>
-        {m.failed > 0 && (
-          <button
-            onClick={onViewJobs}
-            className="flex items-center gap-1 text-xs text-red-600 hover:text-red-800 font-medium shrink-0"
-          >
-            <AlertCircle className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">View Failures</span>
-            <span className="sm:hidden">Failures</span>
-          </button>
-        )}
+        <div className="flex items-center gap-2 shrink-0">
+          {(m.missing ?? 0) > 0 && (
+            <button
+              type="button"
+              onClick={() => missingList.length > 0 && setMissingOpen((o) => !o)}
+              disabled={missingList.length === 0}
+              className={cn(
+                'flex items-center gap-1 text-xs font-medium',
+                missingList.length > 0
+                  ? 'text-slate-600 hover:text-slate-800'
+                  : 'text-slate-300 cursor-not-allowed',
+              )}
+            >
+              {missingOpen && missingList.length > 0 ? (
+                <ChevronUp className="w-3.5 h-3.5" />
+              ) : (
+                <ChevronDown className="w-3.5 h-3.5" />
+              )}
+              <span className="hidden sm:inline">Missing IDs</span>
+              <span className="sm:hidden">Miss</span>
+            </button>
+          )}
+          {m.failed > 0 && (
+            <button
+              onClick={onViewJobs}
+              className="flex items-center gap-1 text-xs text-red-600 hover:text-red-800 font-medium"
+            >
+              <AlertCircle className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">View Failures</span>
+              <span className="sm:hidden">Failures</span>
+            </button>
+          )}
+        </div>
       </div>
 
-      {/* Connector-level summary stats — 4-col grid on all sizes */}
-      <div className="grid grid-cols-4 gap-2 text-center mb-1">
+      {/* Connector-level summary — incl. missing = Zwing invoices with no GIP job for this connector */}
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-center mb-1">
         <div>
           <p className="text-[10px] text-green-500 mb-0.5">Succeeded</p>
           <p className={cn('text-sm font-semibold', (m.succeeded ?? 0) > 0 ? 'text-green-600' : 'text-gray-400')}>
@@ -163,6 +227,18 @@ function ConnectorCard({ connector: c, onViewJobs }: { connector: any; onViewJob
           </p>
         </div>
         <div>
+          <p className="text-[10px] text-slate-400 mb-0.5">Missing</p>
+          <p
+            className={cn(
+              'text-sm font-semibold',
+              (m.missing ?? 0) > 0 ? 'text-slate-600' : 'text-gray-300',
+            )}
+            title="In Zwing window but no DipJob for this connector"
+          >
+            {m.missing ?? 0}
+          </p>
+        </div>
+        <div className="col-span-2 sm:col-span-1">
           <p className="text-[10px] text-gray-400 mb-0.5">Success %</p>
           <p className={cn(
             'text-sm font-semibold',
@@ -175,16 +251,58 @@ function ConnectorCard({ connector: c, onViewJobs }: { connector: any; onViewJob
         </div>
       </div>
 
+      {(m.missing ?? 0) > 0 && missingList.length === 0 && (
+        <p className="mt-2 text-xs text-slate-500">
+          {m.missing} invoice(s) have no DipJob for this connector; ID list unavailable (reload or update API).
+        </p>
+      )}
+
+      {/* Missing invoice IDs for this connector (Zwing row, no DipJob here) */}
+      {(m.missing ?? 0) > 0 && missingList.length > 0 && missingOpen && (
+        <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50/80 p-3">
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <p className="text-xs font-medium text-slate-700">
+              Invoices in Zwing with no GIP job for this connector
+              {missingTruncated && (
+                <span className="text-slate-500 font-normal ml-1">
+                  (showing first {missingList.length} of {m.missing})
+                </span>
+              )}
+            </p>
+            <div className="flex items-center gap-1 shrink-0">
+              <CopyIconButton text={missingList.join('\n')} title="Copy all IDs" />
+              <span className="text-[10px] text-slate-400">copy all</span>
+            </div>
+          </div>
+          <ul className="max-h-48 overflow-y-auto space-y-1 text-[11px] font-mono text-slate-800">
+            {missingList.map((id) => (
+              <li key={id} className="flex items-center gap-1.5 py-0.5 border-b border-slate-100/80 last:border-0">
+                <span className="flex-1 min-w-0 truncate select-all" title={id}>{id}</span>
+                <CopyIconButton text={id} title="Copy" />
+                <Link
+                  href={`/trace?invoiceId=${encodeURIComponent(id)}&ssoEnterpriseId=${encodeURIComponent(ssoEnterpriseId)}`}
+                  className="p-1 rounded text-gray-400 hover:text-indigo-600"
+                  title="Trace invoice"
+                >
+                  <ExternalLink className="w-3 h-3" />
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {/* Event-wise breakdown table — horizontally scrollable */}
       {c.mappings?.length > 0 && (
         <div className="mt-3 pt-3 border-t border-gray-100 overflow-x-auto">
-          <table className="w-full text-xs min-w-[480px]">
+          <table className="w-full text-xs min-w-[540px]">
             <thead>
               <tr className="text-gray-400 text-left">
                 <th className="pb-1.5 font-medium">Event</th>
                 <th className="pb-1.5 font-medium text-right pr-3">OK</th>
                 <th className="pb-1.5 font-medium text-right pr-3">Fail</th>
                 <th className="pb-1.5 font-medium text-right pr-3">Pend</th>
+                <th className="pb-1.5 font-medium text-right pr-3">Miss</th>
                 <th className="pb-1.5 font-medium text-right">Rate</th>
                 <th className="pb-1.5 w-14"></th>
               </tr>
@@ -214,6 +332,13 @@ function ConnectorCard({ connector: c, onViewJobs }: { connector: any; onViewJob
                     <td className="py-1.5 pr-3 text-right">
                       {em ? <span className={cn('font-medium', em.pending > 0 ? 'text-yellow-600' : 'text-gray-400')}>{em.pending}</span> : <span className="text-gray-300">—</span>}
                     </td>
+                    <td className="py-1.5 pr-3 text-right">
+                      {em && em.missing != null ? (
+                        <span className={cn('font-medium', em.missing > 0 ? 'text-slate-600' : 'text-gray-300')}>{em.missing}</span>
+                      ) : (
+                        <span className="text-gray-300">—</span>
+                      )}
+                    </td>
                     <td className="py-1.5 text-right">
                       {em ? (
                         <span className={cn('font-semibold', em.success_rate >= 98 ? 'text-green-600' : em.success_rate >= 90 ? 'text-yellow-600' : 'text-red-600')}>
@@ -226,9 +351,11 @@ function ConnectorCard({ connector: c, onViewJobs }: { connector: any; onViewJob
                         ? <span className="text-[10px] px-1.5 py-0.5 bg-yellow-50 text-yellow-600 rounded font-medium">Off</span>
                         : em?.failed > 0
                           ? <span className="text-[10px] px-1.5 py-0.5 bg-red-50 text-red-600 rounded font-medium">Fail</span>
-                          : em?.succeeded > 0
-                            ? <span className="text-[10px] px-1.5 py-0.5 bg-green-50 text-green-600 rounded font-medium">OK</span>
-                            : null}
+                          : (em?.missing ?? 0) > 0
+                            ? <span className="text-[10px] px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded font-medium">Miss</span>
+                            : em?.succeeded > 0
+                              ? <span className="text-[10px] px-1.5 py-0.5 bg-green-50 text-green-600 rounded font-medium">OK</span>
+                              : null}
                     </td>
                   </tr>
                 );

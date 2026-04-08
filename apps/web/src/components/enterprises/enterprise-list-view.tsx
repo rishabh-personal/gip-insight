@@ -160,49 +160,52 @@ export function EnterpriseListView() {
 
       {/* ── Tab group: connector context (row 1) + sub-tabs (row 2) ── */}
       <div className="space-y-0">
-      {/* Row 1: connector context — horizontally scrollable on mobile */}
-      <div className="flex items-center border-b border-gray-200 overflow-x-auto scrollbar-hide">
-        <button
-          onClick={() => { setActiveConnectorName(''); setActiveSubTab('all'); }}
-          className={cn(
-            'flex items-center gap-1.5 px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors whitespace-nowrap',
-            !activeConnectorName
-              ? 'border-indigo-600 text-indigo-600'
-              : 'border-transparent text-gray-500 hover:text-gray-700',
-          )}
-        >
-          All
-        </button>
+      {/* Row 1: connector context — tabs scroll, Add button stays pinned */}
+      <div className="flex items-center border-b border-gray-200">
+        {/* Scrollable tabs */}
+        <div className="flex-1 flex items-center overflow-x-auto scrollbar-hide min-w-0">
+          <button
+            onClick={() => { setActiveConnectorName(''); setActiveSubTab('all'); }}
+            className={cn(
+              'flex items-center gap-1.5 px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors whitespace-nowrap shrink-0',
+              !activeConnectorName
+                ? 'border-indigo-600 text-indigo-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700',
+            )}
+          >
+            All
+          </button>
 
-        {views.map((view) => (
-          <div key={view.id} className="flex items-center -mb-px">
-            <button
-              onClick={() => { setActiveConnectorName(view.connectorName); setActiveSubTab('all'); }}
-              className={cn(
-                'flex items-center gap-1.5 px-3 py-2 text-sm font-medium border-b-2 transition-colors whitespace-nowrap',
-                activeConnectorName === view.connectorName
-                  ? 'border-indigo-600 text-indigo-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700',
-              )}
-            >
-              <Pin className="w-3 h-3 shrink-0" />
-              {view.label}
-            </button>
-            <button
-              onClick={() => {
-                if (activeConnectorName === view.connectorName) setActiveConnectorName('');
-                removeView(view.id);
-              }}
-              title="Remove connector tab"
-              className="text-gray-300 hover:text-red-400 pr-1 -ml-1 transition-colors"
-            >
-              <X className="w-3 h-3" />
-            </button>
-          </div>
-        ))}
+          {views.map((view) => (
+            <div key={view.id} className="flex items-center -mb-px shrink-0">
+              <button
+                onClick={() => { setActiveConnectorName(view.connectorName); setActiveSubTab('all'); }}
+                className={cn(
+                  'flex items-center gap-1.5 px-3 py-2 text-sm font-medium border-b-2 transition-colors whitespace-nowrap',
+                  activeConnectorName === view.connectorName
+                    ? 'border-indigo-600 text-indigo-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700',
+                )}
+              >
+                <Pin className="w-3 h-3 shrink-0" />
+                {view.label}
+              </button>
+              <button
+                onClick={() => {
+                  if (activeConnectorName === view.connectorName) setActiveConnectorName('');
+                  removeView(view.id);
+                }}
+                title="Remove connector tab"
+                className="text-gray-300 hover:text-red-400 pr-1 -ml-1 transition-colors shrink-0"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+          ))}
+        </div>
 
-        {/* Add connector tab picker */}
-        <div ref={pickerRef} className="relative ml-2 mb-px">
+        {/* Add connector tab picker — outside overflow container so dropdown is never clipped */}
+        <div ref={pickerRef} className="relative ml-2 shrink-0 pb-px">
           <button
             onClick={() => setShowConnectorPicker((v) => !v)}
             className={cn(
@@ -217,7 +220,7 @@ export function EnterpriseListView() {
           </button>
 
           {showConnectorPicker && (
-            <div className="absolute top-full left-0 mt-1 z-20 bg-white rounded-lg shadow-lg border border-gray-200 w-56 py-1 max-h-72 overflow-y-auto">
+            <div className="absolute top-full right-0 mt-1 z-20 bg-white rounded-lg shadow-lg border border-gray-200 w-56 py-1 max-h-72 overflow-y-auto">
               <p className="px-3 pt-1.5 pb-1 text-[10px] font-semibold text-gray-400 uppercase tracking-wider">
                 Pin connector as tab
               </p>

@@ -7,11 +7,34 @@ import { useDateRange } from '@/hooks/use-date-range';
 import { formatDate, cn } from '@/lib/utils';
 import { PageLoader, ErrorState, EmptyState } from '@/components/ui/loading';
 import { StatCard } from '@/components/ui/stat-card';
-import { ArrowLeft, AlertTriangle, CheckCircle2, RefreshCw, Zap, Clock } from 'lucide-react';
+import { ArrowLeft, AlertTriangle, CheckCircle2, RefreshCw, Zap, Clock, ExternalLink, Copy, Check } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
 
 type TabId = 'missed' | 'pending';
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  };
+  return (
+    <button
+      onClick={handleCopy}
+      title="Copy to clipboard"
+      className={cn(
+        'p-0.5 rounded transition-colors',
+        copied ? 'text-green-500' : 'text-gray-300 hover:text-gray-500',
+      )}
+    >
+      {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+    </button>
+  );
+}
 
 export function SyncGapView({ ssoEnterpriseId }: { ssoEnterpriseId: string }) {
   const router = useRouter();
@@ -321,7 +344,10 @@ export function SyncGapView({ ssoEnterpriseId }: { ssoEnterpriseId: string }) {
                     <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Sub Type</th>
                     <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Zwing Status</th>
                     {activeTab === 'pending' && (
-                      <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Last GIP Attempt</th>
+                      <>
+                        <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Last GIP Attempt</th>
+                        <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Job ID</th>
+                      </>
                     )}
                     <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Created</th>
                     <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Trace</th>
@@ -356,9 +382,30 @@ export function SyncGapView({ ssoEnterpriseId }: { ssoEnterpriseId: string }) {
                           <span className="text-xs px-2 py-0.5 rounded bg-gray-100 text-gray-600">{inv.status}</span>
                         </td>
                         {activeTab === 'pending' && (
-                          <td className="px-4 py-3 text-xs text-yellow-600">
-                            {inv.gipLastAttempt ? formatDate(inv.gipLastAttempt) : '—'}
-                          </td>
+                          <>
+                            <td className="px-4 py-3 text-xs text-yellow-600">
+                              {inv.gipLastAttempt ? formatDate(inv.gipLastAttempt) : '—'}
+                            </td>
+                            <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                              {inv.gipJobId ? (
+                                <div className="flex items-center gap-1.5">
+                                  <span className="font-mono text-[11px] text-gray-700 select-all">
+                                    {inv.gipJobId}
+                                  </span>
+                                  <CopyButton text={inv.gipJobId} />
+                                  <button
+                                    onClick={() => router.push(`/jobs/${inv.gipJobId}`)}
+                                    title="Open job detail"
+                                    className="text-gray-300 hover:text-indigo-600 transition-colors"
+                                  >
+                                    <ExternalLink className="w-3 h-3" />
+                                  </button>
+                                </div>
+                              ) : (
+                                <span className="text-gray-300 text-xs">—</span>
+                              )}
+                            </td>
+                          </>
                         )}
                         <td className="px-4 py-3 text-xs text-gray-500">{formatDate(inv.created_at)}</td>
                         <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>

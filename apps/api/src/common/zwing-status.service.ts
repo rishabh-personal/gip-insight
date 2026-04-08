@@ -70,7 +70,7 @@ export class ZwingStatusService {
       rows = await this.mysql.query<{ invoice_id: string | number }>(
         dbName,
         `SELECT invoice_id FROM invoices
-         WHERE created_at BETWEEN ? AND ? AND deleted_at IS NULL`,
+         WHERE created_at BETWEEN ? AND ? AND channel_id != 3 AND status = 'SUCCESS'`,
         [from, to],
       );
     } catch (e) {
@@ -121,14 +121,15 @@ export class ZwingStatusService {
       // hasFailed on pair = failed attempts AND no success for this connector
       if (g.hasFailed && !g.hasSuccess) inv.hasAnyFailed = true;
     }
-    // hasPendingOnly: jobs exist but none succeeded and none are purely failed yet
+    // hasPendingOnly: jobs exist but none succeeded and none have ever failed (purely in-flight)
     for (const [, inv] of byInvoice) {
       inv.hasPendingOnly = inv.hasAnyJob && !inv.hasSuccess && !inv.hasAnyFailed;
     }
 
     const byPair = jobGroups.map((g) => {
       const purelyFailed = !!g.hasFailed && !g.hasSuccess;
-      const pendingOnly  = !g.hasSuccess && !purelyFailed; // has a job but not failed/succeeded
+      // pendingOnly = jobs exist, no success yet, and NO failure ever — purely in-flight
+      const pendingOnly  = !g.hasSuccess && !g.hasFailed;
       return {
         refDocNo:       g._id.refDocNo,
         connectorId:    g._id.connectorId,
