@@ -81,7 +81,7 @@ export class SyncGapService {
       this.mysql.query(
         vendor.db_name,
         `SELECT invoice_id, store_id, transaction_type, transaction_sub_type, status, created_at
-         FROM invoices WHERE created_at BETWEEN ? AND ? AND deleted_at IS NULL`,
+         FROM invoices WHERE created_at BETWEEN ? AND ? AND channel_id != 3 AND status = 'SUCCESS'`,
         [from, to],
       ).catch((e) => {
         this.logger.warn(`[getPendingInvoices] MySQL query failed: ${errMsg(e)}`);
@@ -110,12 +110,12 @@ export class SyncGapService {
     }
 
     // Build latest GIP job info per invoice (take the most recent pair)
-    const jobInfoMap = new Map<string, { latestDate: Date }>();
+    const jobInfoMap = new Map<string, { latestDate: Date; latestJobId: unknown }>();
     for (const p of byPair) {
       if (!p.hasPendingOnly || !pendingIds.has(p.refDocNo)) continue;
       const existing = jobInfoMap.get(p.refDocNo);
       if (!existing || (p.latestDate && p.latestDate > existing.latestDate)) {
-        jobInfoMap.set(p.refDocNo, { latestDate: p.latestDate });
+        jobInfoMap.set(p.refDocNo, { latestDate: p.latestDate, latestJobId: p.latestJobId });
       }
     }
 
@@ -124,6 +124,7 @@ export class SyncGapService {
       .map((r) => ({
         ...r,
         gipLastAttempt: jobInfoMap.get(String(r.invoice_id))?.latestDate ?? null,
+        gipJobId:       jobInfoMap.get(String(r.invoice_id))?.latestJobId?.toString() ?? null,
       }));
 
     return {
@@ -165,7 +166,7 @@ export class SyncGapService {
     }
 
     // Build Zwing invoice query
-    let invoiceWhere = `created_at BETWEEN ? AND ? AND deleted_at IS NULL`;
+    let invoiceWhere = `created_at BETWEEN ? AND ? AND channel_id != 3 AND status = 'SUCCESS'`;
     const invoiceParams: any[] = [from, to];
     if (opts.transactionType) {
       invoiceWhere += ` AND transaction_type = ?`;

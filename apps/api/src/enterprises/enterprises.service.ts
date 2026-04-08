@@ -262,9 +262,9 @@ export class EnterprisesService {
     const total_success_rate = zwing_invoices > 0
       ? Math.round((totalSucceeded / zwing_invoices) * 100 * 10) / 10 : 0;
 
-    const connectorMetrics: Record<string, { zwing: number; succeeded: number; failed: number; pending: number }> = {};
+    const connectorMetrics: Record<string, { zwing: number; succeeded: number; failed: number; pending: number; missing: number }> = {};
     for (const cid of connectorIds.map((id) => id.toString())) {
-      connectorMetrics[cid] = { zwing: zwingInvoiceIds.length, succeeded: 0, failed: 0, pending: 0 };
+      connectorMetrics[cid] = { zwing: zwingInvoiceIds.length, succeeded: 0, failed: 0, pending: 0, missing: 0 };
     }
     for (const p of byPair) {
       const cid = p.connectorId?.toString();
@@ -272,6 +272,22 @@ export class EnterprisesService {
       if (p.hasSuccess)          connectorMetrics[cid].succeeded++;
       else if (p.hasPendingOnly) connectorMetrics[cid].pending++;
       else if (p.hasFailed)      connectorMetrics[cid].failed++;
+    }
+    // Invoices in Zwing with no DipJob for this connector (not failed — never reached GIP)
+    for (const cid of connectorIds.map((id) => id.toString())) {
+      const cm = connectorMetrics[cid];
+      cm.missing = Math.max(0, cm.zwing - cm.succeeded - cm.failed - cm.pending);
+    }
+
+    const MISSING_REF_DOC_CAP = 500;
+    const invoicesWithJobByConnector = new Map<string, Set<string>>();
+    for (const cid of connectorIds.map((id) => id.toString())) {
+      invoicesWithJobByConnector.set(cid, new Set());
+    }
+    for (const p of byPair) {
+      const cid = p.connectorId?.toString();
+      if (!cid || !invoicesWithJobByConnector.has(cid)) continue;
+      invoicesWithJobByConnector.get(cid)!.add(String(p.refDocNo));
     }
 
     // ── Event-wise metrics: group jobs by connectorAppEventId (= CEM _id) ──
@@ -333,12 +349,23 @@ export class EnterprisesService {
 
     const enrichedConnectors = connectors.map((c) => {
       const cid = c._id.toString();
-      const cm  = connectorMetrics[cid] ?? { zwing: 0, succeeded: 0, failed: 0, pending: 0 };
-      const total_jobs   = cm.succeeded + cm.failed;
+      const cm  = connectorMetrics[cid] ?? { zwing: 0, succeeded: 0, failed: 0, pending: 0, missing: 0 };
+      const total_jobs   = cm.succeeded + cm.failed + cm.pending;
       const success_rate = cm.zwing > 0
         ? Math.round((cm.succeeded / cm.zwing) * 100 * 10) / 10 : 0;
       const failure_rate = cm.zwing > 0
         ? Math.round((cm.failed / cm.zwing) * 100 * 10) / 10 : 0;
+
+      const touched = invoicesWithJobByConnector.get(cid) ?? new Set<string>();
+      let missingRefDocNos: string[] = [];
+      let missingRefDocNosTruncated = false;
+      if (cm.missing > 0) {
+        const allMissing = zwingInvoiceIds.filter((id) => !touched.has(String(id))).sort();
+        missingRefDocNosTruncated = allMissing.length > MISSING_REF_DOC_CAP;
+        missingRefDocNos = missingRefDocNosTruncated
+          ? allMissing.slice(0, MISSING_REF_DOC_CAP)
+          : allMissing;
+      }
 
       const mappings = cemList
         .filter((m) => m.connectorId.toString() === c._id.toString())
@@ -347,6 +374,9 @@ export class EnterprisesService {
           const zwing = zwingInvoiceIds.length;
           const eventSuccessRate = zwing > 0 && em
             ? Math.round((em.succeeded / zwing) * 100 * 10) / 10 : 0;
+          const eventMissing = em
+            ? Math.max(0, zwing - em.succeeded - em.failed - em.pending)
+            : undefined;
           return {
             _id:           m._id,
             outboundEvent: eventMap[m.outboundEventId?.toString()],
@@ -354,7 +384,13 @@ export class EnterprisesService {
             isEnabled:     m.isEnabled,
             isRetryable:   m.isRetryable,
             metrics: em
-              ? { succeeded: em.succeeded, failed: em.failed, pending: em.pending, success_rate: eventSuccessRate }
+              ? {
+                  succeeded: em.succeeded,
+                  failed: em.failed,
+                  pending: em.pending,
+                  missing: eventMissing,
+                  success_rate: eventSuccessRate,
+                }
               : null,
           };
         });
@@ -368,10 +404,17 @@ export class EnterprisesService {
         deletedOn: c.deletedOn,
         mappings,
         metrics: {
-          zwing_invoices: cm.zwing, total_jobs,
-          succeeded: cm.succeeded, failed: cm.failed, pending: cm.pending,
+          zwing_invoices: cm.zwing,
+          total_jobs,
+          succeeded: cm.succeeded,
+          failed: cm.failed,
+          pending: cm.pending,
+          missing: cm.missing,
+          missingRefDocNos,
+          missingRefDocNosTruncated,
           success: cm.succeeded,
-          failure_rate, success_rate,
+          failure_rate,
+          success_rate,
         },
       };
     });
