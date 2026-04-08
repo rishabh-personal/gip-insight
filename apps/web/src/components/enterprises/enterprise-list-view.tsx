@@ -333,6 +333,7 @@ export function EnterpriseListView() {
           enterprises={visibleEnterprises}
           from={from}
           to={to}
+          connectorName={activeConnectorName || undefined}
           importantCount={importantCount}
           isImportant={isImportant}
           isTest={isTest}

@@ -140,11 +140,16 @@ export class EnterprisesService {
   /**
    * Metrics for a single enterprise — called async per row after list renders.
    * Zwing MySQL is the source of truth; GIP MongoDB checked for each invoice.
+   *
+   * When `connectorName` is supplied (connector-tab mode), only jobs for that
+   * connector are considered and success/failure is evaluated per-connector.
+   * When omitted (All tab), cross-connector rollup with success-takes-priority.
    */
   async getEnterpriseMetrics(
     ssoEnterpriseId: string,
     from: Date,
     to: Date,
+    connectorName?: string,
   ): Promise<any> {
     const vendorRows = await this.getVendorRows([ssoEnterpriseId]);
     const dbName = vendorRows[0]?.db_name ?? null;
@@ -156,20 +161,60 @@ export class EnterprisesService {
       };
     }
 
-    const { invoiceIds, byInvoice } = await this.zwingStatus.buildZwingJobStatus(
-      ssoEnterpriseId, dbName, from, to,
+    // Resolve connector IDs when a specific connector tab is selected
+    let connectorIds: string[] | undefined;
+    if (connectorName) {
+      const connectorDocs = await this.connectorModel
+        .find({ ssoEnterpriseId, name: connectorName, deletedOn: null }, { _id: 1 })
+        .lean();
+      connectorIds = connectorDocs.map((c) => c._id.toString());
+      // No connector found for this enterprise — return zeroed metrics
+      if (!connectorIds.length) {
+        return {
+          ssoEnterpriseId, health: 'green', dbName,
+          metrics: { zwing_invoices: 0, succeeded: 0, failed: 0, pending: 0, missing: 0, processed: 0, sync_gap: 0, success: 0, total_jobs: 0, gip_events: 0, processing: 0, success_rate: 0, failure_rate: 0 },
+        };
+      }
+    }
+
+    const { invoiceIds, byInvoice, byPair } = await this.zwingStatus.buildZwingJobStatus(
+      ssoEnterpriseId, dbName, from, to, connectorIds,
     );
 
     const zwing_invoices = invoiceIds.length;
     let succeeded = 0, failed = 0, pending = 0, missing = 0;
-    for (const [, v] of byInvoice) {
-      // hasAnyFailed takes priority: if ANY connector failed for this invoice,
-      // surface it as a failure even if another connector delivered it successfully.
-      if (v.hasAnyFailed)        failed++;
-      else if (v.hasSuccess)     succeeded++;
-      else if (v.hasPendingOnly) pending++;
-      else                       missing++;
+
+    if (connectorName && connectorIds?.length) {
+      // ── Connector-tab mode: per-connector accuracy ────────────────────────
+      // byPair is already scoped to this connector; build per-invoice rollup.
+      const invoiceStatus = new Map<string, { hasSuccess: boolean; hasFailed: boolean; hasPending: boolean }>();
+      for (const id of invoiceIds) {
+        invoiceStatus.set(id, { hasSuccess: false, hasFailed: false, hasPending: false });
+      }
+      for (const p of byPair) {
+        const inv = invoiceStatus.get(String(p.refDocNo));
+        if (!inv) continue;
+        if (p.hasSuccess)     inv.hasSuccess = true;
+        if (p.hasFailed)      inv.hasFailed  = true;
+        if (p.hasPendingOnly) inv.hasPending  = true;
+      }
+      for (const [, v] of invoiceStatus) {
+        if (v.hasSuccess)      succeeded++;
+        else if (v.hasFailed)  failed++;
+        else if (v.hasPending) pending++;
+        else                   missing++;
+      }
+    } else {
+      // ── All-connectors mode: success takes priority ───────────────────────
+      // If ANY connector delivered the invoice, count it as succeeded.
+      for (const [, v] of byInvoice) {
+        if (v.hasSuccess)          succeeded++;
+        else if (v.hasAnyFailed)   failed++;
+        else if (v.hasPendingOnly) pending++;
+        else                       missing++;
+      }
     }
+
     const processed    = succeeded + failed;
     const sync_gap     = missing + pending;
     const success_rate = zwing_invoices > 0
@@ -218,7 +263,7 @@ export class EnterprisesService {
 
     const [apps, cemList] = await Promise.all([
       this.appModel.find({ _id: { $in: appIds.map((id) => new Types.ObjectId(id)) } }).lean(),
-      this.cemModel.find({ connectorId: { $in: connectorIds } }).lean(),
+      this.cemModel.find({ connectorId: { $in: connectorIds }, isEnabled: true }).lean(),
     ]);
 
     const appMap: Record<string, any> = {};
@@ -248,13 +293,12 @@ export class EnterprisesService {
       byInvoice = status.byInvoice;
     }
 
-    // Overall invoice-level totals (same logic as getEnterpriseMetrics)
+    // Overall invoice-level totals — success takes priority.
+    // Connector-level breakdown below shows per-connector failures.
     let totalSucceeded = 0, totalFailed = 0, totalPending = 0, totalMissing = 0;
     for (const [, v] of byInvoice) {
-      // hasAnyFailed takes priority: if ANY connector failed for this invoice,
-      // surface it as a failure even if another connector delivered it successfully.
-      if (v.hasAnyFailed)        totalFailed++;
-      else if (v.hasSuccess)     totalSucceeded++;
+      if (v.hasSuccess)          totalSucceeded++;
+      else if (v.hasAnyFailed)   totalFailed++;
       else if (v.hasPendingOnly) totalPending++;
       else                       totalMissing++;
     }

@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { DipJob } from '../schemas/dip-job.schema';
 import { MysqlTenantService } from '../database/mysql-tenant.service';
 
@@ -62,6 +62,8 @@ export class ZwingStatusService {
     dbName: string,
     from: Date,
     to: Date,
+    /** When set, only jobs for these connector IDs are included (connector-tab mode). */
+    connectorIds?: string[],
   ): Promise<ZwingJobStatusResult> {
     const empty: ZwingJobStatusResult = { invoiceIds: [], byInvoice: new Map(), byPair: [] };
 
@@ -83,14 +85,20 @@ export class ZwingStatusService {
     const invoiceIds = rows.map((r) => String(r.invoice_id));
     if (!invoiceIds.length) return empty;
 
+    const jobMatch: Record<string, any> = {
+      ssoEnterpriseId,
+      refDocNo: { $in: invoiceIds },
+      // No upper bound: capture retriggered / delayed deliveries that land after
+      // the Zwing window closes. Invoice set is already bounded by the MySQL query.
+      transactionDate: { $gte: from },
+    };
+    // Connector-tab mode: scope jobs to the selected connector(s) only.
+    if (connectorIds && connectorIds.length > 0) {
+      jobMatch.connectorId = { $in: connectorIds.map((id) => new Types.ObjectId(id)) };
+    }
+
     const jobGroups = await this.jobModel.aggregate([
-      {
-        $match: {
-          ssoEnterpriseId,
-          refDocNo: { $in: invoiceIds },
-          transactionDate: { $gte: from }, // no upper bound
-        },
-      },
+      { $match: jobMatch },
       { $sort: { transactionDate: -1 } },
       {
         $group: {

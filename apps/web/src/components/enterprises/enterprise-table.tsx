@@ -11,6 +11,8 @@ interface EnterpriseTableProps {
   enterprises: any[];
   from: string;
   to: string;
+  /** When set, metrics are scoped to this connector only (connector-tab mode). */
+  connectorName?: string;
   importantCount?: number;
   isImportant?: (id: string) => boolean;
   isTest?: (id: string) => boolean;
@@ -50,10 +52,18 @@ function AppPill({ name }: { name: string }) {
 }
 
 /** Shared metrics fetcher — used by both card and row views */
-function useEnterpriseRowData(ssoEnterpriseId: string, from: string, to: string) {
+function useEnterpriseRowData(
+  ssoEnterpriseId: string,
+  from: string,
+  to: string,
+  connectorName?: string,
+) {
   return useQuery({
-    queryKey: ['enterprise-metrics', ssoEnterpriseId, from, to],
-    queryFn: () => getEnterpriseMetrics(ssoEnterpriseId, { from, to }),
+    queryKey: ['enterprise-metrics', ssoEnterpriseId, from, to, connectorName ?? ''],
+    queryFn: () => getEnterpriseMetrics(ssoEnterpriseId, {
+      from, to,
+      ...(connectorName ? { connectorName } : {}),
+    }),
     staleTime: 60_000,
   });
 }
@@ -61,10 +71,10 @@ function useEnterpriseRowData(ssoEnterpriseId: string, from: string, to: string)
 // ─── Mobile card ──────────────────────────────────────────────────────────────
 
 function EnterpriseCard({
-  enterprise, from, to,
+  enterprise, from, to, connectorName,
   isImportant, isTest, toggleImportant, toggleTest, onFailureReport,
 }: {
-  enterprise: any; from: string; to: string;
+  enterprise: any; from: string; to: string; connectorName?: string;
   isImportant?: (id: string) => boolean; isTest?: (id: string) => boolean;
   toggleImportant?: (id: string) => void; toggleTest?: (id: string) => void;
   onFailureReport?: (id: string, hasFailed: boolean) => void;
@@ -73,7 +83,7 @@ function EnterpriseCard({
   const id = enterprise.ssoEnterpriseId;
   const important = isImportant?.(id);
 
-  const { data, isLoading } = useEnterpriseRowData(id, from, to);
+  const { data, isLoading } = useEnterpriseRowData(id, from, to, connectorName);
   const m = data?.data?.metrics;
   const health = data?.data?.health;
   const hasFailed = (m?.failed ?? 0) > 0;
@@ -174,10 +184,10 @@ function EnterpriseCard({
 // ─── Desktop table row (unchanged) ────────────────────────────────────────────
 
 function EnterpriseRow({
-  enterprise, from, to,
+  enterprise, from, to, connectorName,
   isImportant, isTest, toggleImportant, toggleTest, onFailureReport,
 }: {
-  enterprise: any; from: string; to: string;
+  enterprise: any; from: string; to: string; connectorName?: string;
   isImportant?: (id: string) => boolean; isTest?: (id: string) => boolean;
   toggleImportant?: (id: string) => void; toggleTest?: (id: string) => void;
   onFailureReport?: (id: string, hasFailed: boolean) => void;
@@ -187,7 +197,7 @@ function EnterpriseRow({
   const important = isImportant?.(id);
   const test = isTest?.(id);
 
-  const { data, isLoading } = useEnterpriseRowData(id, from, to);
+  const { data, isLoading } = useEnterpriseRowData(id, from, to, connectorName);
   const m = data?.data?.metrics;
   const health = data?.data?.health;
   const hasFailed = (m?.failed ?? 0) > 0;
@@ -301,10 +311,10 @@ function EnterpriseRow({
 // ─── Public component ─────────────────────────────────────────────────────────
 
 export function EnterpriseTable({
-  enterprises, from, to, importantCount = 0,
+  enterprises, from, to, connectorName, importantCount = 0,
   isImportant, isTest, toggleImportant, toggleTest, onFailureReport,
 }: EnterpriseTableProps) {
-  const sharedProps = { from, to, isImportant, isTest, toggleImportant, toggleTest, onFailureReport };
+  const sharedProps = { from, to, connectorName, isImportant, isTest, toggleImportant, toggleTest, onFailureReport };
 
   return (
     <>

@@ -54,6 +54,29 @@ export class DipJobsController {
     });
   }
 
+  @Get('enterprises/:ssoEnterpriseId/jobs/list')
+  @ApiOperation({ summary: 'All / success / failed jobs for an enterprise+connector (connector log view)' })
+  @ApiQuery({ name: 'status', required: false, description: 'all | success | failed | pending (default: all)' })
+  @ApiQuery({ name: 'connectorId', required: false })
+  async jobsList(
+    @Param('ssoEnterpriseId') ssoEnterpriseId: string,
+    @Query() pagination: PaginationDto,
+    @Query('connectorId') connectorId?: string,
+    @Query('status') status?: string,
+  ) {
+    const validStatuses = ['all', 'success', 'failed', 'pending'];
+    const resolvedStatus = validStatuses.includes(status ?? '') ? (status as any) : 'all';
+    return this.svc.getJobsList({
+      ssoEnterpriseId,
+      connectorId,
+      status: resolvedStatus,
+      from: pagination.fromDate,
+      to: pagination.toDate,
+      page: pagination.page,
+      limit: pagination.limit,
+    });
+  }
+
   @Get('jobs/blob')
   @ApiOperation({ summary: 'Read task input/output payload from Azure Blob Storage' })
   @ApiQuery({ name: 'path', required: true, description: 'Blob path (inputDataPath or outputDataPath from DipJobTask)' })
