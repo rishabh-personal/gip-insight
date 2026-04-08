@@ -12,7 +12,7 @@ import { StatCard } from '@/components/ui/stat-card';
 import { Badge } from '@/components/ui/badge';
 import {
   ChevronRight, ChevronDown, ChevronUp, AlertCircle, Activity, ArrowLeft, GitBranch, Database,
-  Copy, Check, ExternalLink,
+  Copy, Check, ExternalLink, CheckCircle2,
 } from 'lucide-react';
 
 export function EnterpriseDetailView({ ssoEnterpriseId }: { ssoEnterpriseId: string }) {
@@ -100,8 +100,10 @@ export function EnterpriseDetailView({ ssoEnterpriseId }: { ssoEnterpriseId: str
                 key={c._id}
                 connector={c}
                 ssoEnterpriseId={ssoEnterpriseId}
+                from={from}
+                to={to}
                 onViewJobs={() =>
-                  router.push(`/jobs?ssoEnterpriseId=${ssoEnterpriseId}&connectorId=${c._id}&from=${from}&to=${to}`)
+                  router.push(`/enterprises/${ssoEnterpriseId}/logs?connectorId=${c._id}&connectorName=${encodeURIComponent(c.name)}&status=failed&from=${from}&to=${to}`)
                 }
               />
             ))}
@@ -137,10 +139,14 @@ function CopyIconButton({ text, title }: { text: string; title?: string }) {
 function ConnectorCard({
   connector: c,
   ssoEnterpriseId,
+  from,
+  to,
   onViewJobs,
 }: {
   connector: any;
   ssoEnterpriseId: string;
+  from: string;
+  to: string;
   onViewJobs: () => void;
 }) {
   const m = c.metrics || {};
@@ -193,16 +199,37 @@ function ConnectorCard({
               <span className="sm:hidden">Miss</span>
             </button>
           )}
-          {m.failed > 0 && (
-            <button
-              onClick={onViewJobs}
-              className="flex items-center gap-1 text-xs text-red-600 hover:text-red-800 font-medium"
+          {/* Log buttons: All · Success · Failures */}
+          <div className="flex items-center gap-1">
+            <Link
+              href={`/enterprises/${ssoEnterpriseId}/logs?connectorId=${c._id}&connectorName=${encodeURIComponent(c.name)}&status=all&from=${from}&to=${to}`}
+              className="flex items-center gap-1 text-xs text-gray-500 hover:text-indigo-700 font-medium px-1.5 py-0.5 rounded hover:bg-indigo-50 transition-colors"
+              title="All logs"
             >
-              <AlertCircle className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">View Failures</span>
-              <span className="sm:hidden">Failures</span>
-            </button>
-          )}
+              <Activity className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">All</span>
+            </Link>
+            {(m.succeeded ?? 0) > 0 && (
+              <Link
+                href={`/enterprises/${ssoEnterpriseId}/logs?connectorId=${c._id}&connectorName=${encodeURIComponent(c.name)}&status=success&from=${from}&to=${to}`}
+                className="flex items-center gap-1 text-xs text-green-600 hover:text-green-800 font-medium px-1.5 py-0.5 rounded hover:bg-green-50 transition-colors"
+                title="Success logs"
+              >
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Success</span>
+              </Link>
+            )}
+            {(m.failed ?? 0) > 0 && (
+              <Link
+                href={`/enterprises/${ssoEnterpriseId}/logs?connectorId=${c._id}&connectorName=${encodeURIComponent(c.name)}&status=failed&from=${from}&to=${to}`}
+                className="flex items-center gap-1 text-xs text-red-600 hover:text-red-800 font-medium px-1.5 py-0.5 rounded hover:bg-red-50 transition-colors"
+                title="Failure logs"
+              >
+                <AlertCircle className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Failures</span>
+              </Link>
+            )}
+          </div>
         </div>
       </div>
 

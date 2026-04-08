@@ -41,6 +41,25 @@ const config: Config = {
         md: 'calc(var(--radius) - 2px)',
         sm: 'calc(var(--radius) - 4px)',
       },
+      keyframes: {
+        'slide-in-left': {
+          '0%':   { transform: 'translateX(-100%)' },
+          '100%': { transform: 'translateX(0)' },
+        },
+        'slide-in-right': {
+          '0%':   { transform: 'translateX(100%)' },
+          '100%': { transform: 'translateX(0)' },
+        },
+        'fade-in': {
+          '0%':   { opacity: '0' },
+          '100%': { opacity: '1' },
+        },
+      },
+      animation: {
+        'slide-in-left':  'slide-in-left  220ms cubic-bezier(0.25, 0.46, 0.45, 0.94)',
+        'slide-in-right': 'slide-in-right 220ms cubic-bezier(0.25, 0.46, 0.45, 0.94)',
+        'fade-in':        'fade-in 180ms ease-out',
+      },
     },
   },
   plugins: [],

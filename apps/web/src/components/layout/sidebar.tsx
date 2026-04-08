@@ -5,13 +5,14 @@ import { usePathname } from 'next/navigation';
 import { cn } from '@/lib/utils';
 import {
   Building2, AlertCircle, Search, Activity, Zap,
-  ChevronLeft, ChevronRight,
+  ChevronLeft, ChevronRight, BookMarked,
 } from 'lucide-react';
 
 const navItems = [
-  { href: '/enterprises', label: 'Enterprises',   icon: Building2,   description: 'All enterprise health' },
-  { href: '/jobs',        label: 'Failed Jobs',    icon: AlertCircle, description: 'Failed delivery jobs'  },
-  { href: '/trace',       label: 'Invoice Trace',  icon: Search,      description: 'End-to-end lookup'     },
+  { href: '/enterprises',      label: 'Enterprises',      icon: Building2,   description: 'All enterprise health'       },
+  { href: '/jobs',             label: 'Failed Jobs',       icon: AlertCircle, description: 'Failed delivery jobs'        },
+  { href: '/trace',            label: 'Invoice Trace',     icon: Search,      description: 'End-to-end lookup'           },
+  { href: '/failure-analysis', label: 'Failure Analysis',  icon: BookMarked,  description: 'Root cause & pattern tracking' },
 ];
 
 interface SidebarProps {

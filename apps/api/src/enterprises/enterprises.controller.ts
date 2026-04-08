@@ -35,14 +35,17 @@ export class EnterprisesController {
 
   @Get(':ssoEnterpriseId/metrics')
   @ApiOperation({ summary: 'Async metrics for a single enterprise — job stats + sync gap (STORY-001)' })
+  @ApiQuery({ name: 'connectorName', required: false, description: 'Scope metrics to a single connector (connector-tab mode)' })
   async metrics(
     @Param('ssoEnterpriseId') ssoEnterpriseId: string,
     @Query() pagination: PaginationDto,
+    @Query('connectorName') connectorName?: string,
   ): Promise<any> {
     const result = await this.svc.getEnterpriseMetrics(
       ssoEnterpriseId,
       pagination.fromDate,
       pagination.toDate,
+      connectorName,
     );
     return { data: result };
   }

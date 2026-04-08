@@ -306,6 +306,46 @@ export class DipJobsService {
     };
   }
 
+  /**
+   * Generic job listing for a connector.
+   * status = 'all' | 'success' | 'failed' | 'pending'
+   * - 'failed' uses Zwing MySQL as source of truth (same as getFailedJobs).
+   * - All other statuses query DipJob directly (fast, no MySQL round-trip).
+   */
+  async getJobsList(opts: {
+    ssoEnterpriseId: string;
+    connectorId?: string;
+    status: 'all' | 'success' | 'failed' | 'pending';
+    from: Date;
+    to: Date;
+    page: number;
+    limit: number;
+  }): Promise<any> {
+    if (opts.status === 'failed') {
+      return this.getFailedJobsForEnterprise({
+        ...opts,
+        page: opts.page,
+        limit: opts.limit,
+      });
+    }
+
+    const match: any = {
+      ssoEnterpriseId: opts.ssoEnterpriseId,
+      transactionDate: { $gte: opts.from, $lte: opts.to },
+    };
+    if (opts.connectorId) match.connectorId = new Types.ObjectId(opts.connectorId);
+    if (opts.status === 'success') match.status = 'success';
+    if (opts.status === 'pending') match.status = { $in: ['pending', 'processing'] };
+
+    const skip = (opts.page - 1) * opts.limit;
+    const [jobs, total] = await Promise.all([
+      this.jobModel.find(match).sort({ transactionDate: -1 }).skip(skip).limit(opts.limit).lean(),
+      this.jobModel.countDocuments(match),
+    ]);
+    const enriched = await this.enrichJobs(jobs);
+    return { data: enriched, meta: { total, page: opts.page, limit: opts.limit } };
+  }
+
   async getJobDetail(jobId: string) {
     const job = await this.jobModel.findById(jobId).lean();
     if (!job) throw new NotFoundException('Job not found');

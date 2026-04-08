@@ -53,6 +53,15 @@ export const getFailedJobs = (params: Record<string, any> = {}) =>
 export const getJobDetail = (jobId: string) =>
   api.get(`/jobs/${jobId}`).then((r) => r.data);
 
+/** All / success / failed / pending job listing for an enterprise+connector. */
+export const getConnectorJobs = (
+  ssoEnterpriseId: string,
+  params: Record<string, any> = {},
+) =>
+  api
+    .get(`/enterprises/${ssoEnterpriseId}/jobs/list`, { params })
+    .then((r) => r.data);
+
 /** Fetch task input or output payload from Azure Blob Storage via the API proxy. */
 export const getBlobContent = (path: string) =>
   api.get('/jobs/blob', { params: { path } }).then((r) => r.data);
@@ -63,3 +72,34 @@ export const traceInvoice = (invoiceId: string, ssoEnterpriseId?: string) =>
   api
     .get('/trace', { params: { invoiceId, ssoEnterpriseId } })
     .then((r) => r.data);
+
+// ---- Failure Tracking ----
+export const getFailureCategories = (connectorName?: string) =>
+  api.get('/failure-tracking/categories', { params: connectorName ? { connectorName } : {} }).then((r) => r.data);
+
+export const createFailureCategory = (data: { name: string; description?: string; color?: string; connectorName?: string | null }) =>
+  api.post('/failure-tracking/categories', data).then((r) => r.data);
+
+export const updateFailureCategory = (id: string, data: Record<string, any>) =>
+  api.patch(`/failure-tracking/categories/${id}`, data).then((r) => r.data);
+
+export const deleteFailureCategory = (id: string) =>
+  api.delete(`/failure-tracking/categories/${id}`).then((r) => r.data);
+
+export const getFailureCases = (params: Record<string, any> = {}) =>
+  api.get('/failure-tracking/cases', { params }).then((r) => r.data);
+
+export const createFailureCase = (data: Record<string, any>) =>
+  api.post('/failure-tracking/cases', data).then((r) => r.data);
+
+export const updateFailureCase = (id: string, data: Record<string, any>) =>
+  api.patch(`/failure-tracking/cases/${id}`, data).then((r) => r.data);
+
+export const incrementFailureOccurrence = (id: string) =>
+  api.post(`/failure-tracking/cases/${id}/increment`).then((r) => r.data);
+
+export const deleteFailureCase = (id: string) =>
+  api.delete(`/failure-tracking/cases/${id}`).then((r) => r.data);
+
+export const getFailureSummary = () =>
+  api.get('/failure-tracking/summary').then((r) => r.data);

@@ -11,6 +11,7 @@ import {
   ArrowLeft, CheckCircle2, XCircle, Clock, Loader2,
   Filter, Globe, Wrench, Database, ChevronRight,
   X, RefreshCw, AlertCircle, GitBranch,
+  Copy, Check, ChevronDown, ChevronRight as ChevronR, Braces, List,
 } from 'lucide-react';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -99,21 +100,151 @@ function buildTree(tasks: Task[]): TreeNode[] {
     .map(buildNode);
 }
 
-// ─── JsonViewer ───────────────────────────────────────────────────────────────
+// ─── Copy button ─────────────────────────────────────────────────────────────
 
-function JsonViewer({ data }: { data: any }) {
-  if (data === null || data === undefined) {
-    return <p className="text-xs text-gray-400 italic">No data</p>;
-  }
-  const text = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+function CopyBtn({ text, size = 'sm' }: { text: string; size?: 'sm' | 'xs' }) {
+  const [ok, setOk] = useState(false);
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(text); setOk(true); setTimeout(() => setOk(false), 1800); } catch { /* ignore */ }
+  };
   return (
-    <pre className="text-[11px] leading-relaxed font-mono text-gray-700 whitespace-pre-wrap break-all overflow-auto max-h-[400px]">
-      {text}
-    </pre>
+    <button
+      onClick={copy}
+      title="Copy"
+      className={cn(
+        'flex items-center gap-1 rounded px-2 py-1 font-medium transition-colors',
+        size === 'sm' ? 'text-xs' : 'text-[10px]',
+        ok ? 'text-green-400' : 'text-gray-400 hover:text-gray-200 hover:bg-white/10',
+      )}
+    >
+      {ok ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+      {ok ? 'Copied!' : 'Copy'}
+    </button>
   );
 }
 
-// ─── BlobPanel ────────────────────────────────────────────────────────────────
+// ─── JSON syntax highlight (code view) ───────────────────────────────────────
+
+function highlight(json: string): React.ReactNode[] {
+  // Token regex: string | number | bool/null | punctuation
+  const re = /("(?:[^"\\]|\\.)*"(?:\s*:)?|true|false|null|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|[{}[\],:])/g;
+  const nodes: React.ReactNode[] = [];
+  let last = 0, m: RegExpExecArray | null;
+  let idx = 0;
+  while ((m = re.exec(json)) !== null) {
+    if (m.index > last) nodes.push(<span key={idx++}>{json.slice(last, m.index)}</span>);
+    const tok = m[0];
+    let cls = 'text-gray-300';
+    if (tok.endsWith(':'))       cls = 'text-blue-300';           // key
+    else if (tok.startsWith('"')) cls = 'text-green-300';          // string value
+    else if (tok === 'true' || tok === 'false') cls = 'text-orange-300'; // boolean
+    else if (tok === 'null')     cls = 'text-gray-500';
+    else if ('{}[]'.includes(tok)) cls = 'text-gray-400';
+    else if (tok === ',' || tok === ':') cls = 'text-gray-500';
+    else                          cls = 'text-purple-300';         // number
+    nodes.push(<span key={idx++} className={cls}>{tok}</span>);
+    last = m.index + tok.length;
+  }
+  if (last < json.length) nodes.push(<span key={idx++}>{json.slice(last)}</span>);
+  return nodes;
+}
+
+function CodeView({ text }: { text: string }) {
+  const lines = text.split('\n');
+  return (
+    <div className="flex min-w-0 h-full">
+      {/* Line numbers */}
+      <div className="select-none shrink-0 text-right pr-3 pt-4 pb-4 text-[11px] leading-5 font-mono text-gray-600 border-r border-gray-700 min-w-[2.8rem]">
+        {lines.map((_, i) => <div key={i}>{i + 1}</div>)}
+      </div>
+      {/* Code */}
+      <pre className="flex-1 overflow-auto p-4 text-[11px] leading-5 font-mono whitespace-pre">
+        {highlight(text)}
+      </pre>
+    </div>
+  );
+}
+
+// ─── JSON tree view ───────────────────────────────────────────────────────────
+
+function JsonTreeNode({
+  value, label, depth = 0, defaultOpen = true,
+}: {
+  value: unknown; label?: string | number; depth?: number; defaultOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen || depth < 2);
+  const isObj  = value !== null && typeof value === 'object' && !Array.isArray(value);
+  const isArr  = Array.isArray(value);
+  const isNested = isObj || isArr;
+
+  const entries = isNested
+    ? isArr
+      ? (value as unknown[]).map((v, i) => [i, v] as [string | number, unknown])
+      : Object.entries(value as Record<string, unknown>)
+    : [];
+
+  const preview = isArr
+    ? `[${(value as unknown[]).length}]`
+    : isObj
+    ? `{${Object.keys(value as object).length}}`
+    : '';
+
+  const valNode = !isNested ? (
+    <span className={cn('font-mono text-[11px]',
+      value === null              ? 'text-gray-500' :
+      typeof value === 'boolean'  ? 'text-orange-300' :
+      typeof value === 'number'   ? 'text-purple-300' :
+                                    'text-green-300',
+    )}>
+      {JSON.stringify(value)}
+    </span>
+  ) : null;
+
+  return (
+    <div className={cn('text-[11px] font-mono', depth > 0 && 'ml-4 border-l border-gray-700 pl-2')}>
+      <div
+        className={cn('flex items-center gap-1 py-0.5', isNested && 'cursor-pointer hover:bg-white/5 rounded px-1')}
+        onClick={isNested ? () => setOpen((o) => !o) : undefined}
+      >
+        {isNested && (
+          open
+            ? <ChevronDown className="w-3 h-3 text-gray-500 shrink-0" />
+            : <ChevronR    className="w-3 h-3 text-gray-500 shrink-0" />
+        )}
+        {!isNested && <span className="w-3 shrink-0" />}
+        {label !== undefined && (
+          <span className="text-blue-300 shrink-0">{JSON.stringify(String(label))}<span className="text-gray-500">: </span></span>
+        )}
+        {isNested ? (
+          open
+            ? <span className="text-gray-400">{isArr ? '[' : '{'}</span>
+            : <span className="text-gray-400">{preview} <span className="text-gray-600">{isArr ? '…]' : '…}'}</span></span>
+        ) : valNode}
+      </div>
+
+      {isNested && open && (
+        <>
+          {entries.map(([k, v]) => (
+            <JsonTreeNode key={String(k)} value={v} label={k} depth={depth + 1} defaultOpen={depth < 1} />
+          ))}
+          <div className="py-0.5 px-1 text-gray-400">{isArr ? ']' : '}'}</div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function TreeView({ data }: { data: unknown }) {
+  return (
+    <div className="overflow-auto h-full p-4 text-gray-200">
+      <JsonTreeNode value={data} depth={0} defaultOpen />
+    </div>
+  );
+}
+
+// ─── BlobPanel — full-height code viewer with toolbar ─────────────────────────
+
+type ViewMode = 'code' | 'tree';
 
 function BlobPanel({ path, label }: { path: string; label: string }) {
   const { data, isLoading, isError, error, refetch } = useQuery({
@@ -124,38 +255,97 @@ function BlobPanel({ path, label }: { path: string; label: string }) {
     enabled: !!path,
   });
 
-  const content = data?.data;
+  const [viewMode, setViewMode] = useState<ViewMode>('code');
+  const [beautify,  setBeautify]  = useState(true);
+
+  const raw     = data?.data;
+  const parsed: unknown  = (() => {
+    if (raw === null || raw === undefined) return null;
+    if (typeof raw === 'object') return raw;
+    try { return JSON.parse(raw as string); } catch { return raw; }
+  })();
+  const text = (() => {
+    if (parsed === null || parsed === undefined) return '';
+    if (typeof parsed === 'string') return parsed;
+    return beautify ? JSON.stringify(parsed, null, 2) : JSON.stringify(parsed);
+  })();
+
+  const canTree = parsed !== null && typeof parsed === 'object';
 
   return (
-    <div className="space-y-1.5">
-      <div className="flex items-center justify-between gap-2">
-        <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider shrink-0">{label}</p>
-        <div className="flex items-center gap-1.5 min-w-0">
-          <p className="text-[10px] text-gray-300 font-mono truncate" title={path}>{path}</p>
-          <button onClick={() => refetch()} title="Retry" className="shrink-0 text-gray-300 hover:text-indigo-500 transition-colors">
-            <RefreshCw className="w-3 h-3" />
-          </button>
-        </div>
+    <div className="flex flex-col h-full min-h-0">
+      {/* Top bar: path + reload */}
+      <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-800 border-b border-gray-700 shrink-0">
+        <p className="text-[10px] font-semibold text-indigo-400 uppercase tracking-wider shrink-0">{label}</p>
+        <p className="text-[10px] text-gray-500 font-mono truncate flex-1" title={path}>{path}</p>
+        <button onClick={() => refetch()} title="Reload blob" className="shrink-0 text-gray-500 hover:text-gray-300 transition-colors">
+          <RefreshCw className="w-3 h-3" />
+        </button>
       </div>
-      <div className="bg-gray-50 rounded-lg p-3 border border-gray-100 min-h-[56px]">
+
+      {/* Toolbar */}
+      {!isLoading && !isError && text && (
+        <div className="flex items-center gap-1 px-3 py-1 bg-gray-800 border-b border-gray-700 shrink-0">
+          {/* View toggle */}
+          <div className="flex items-center bg-gray-900 rounded overflow-hidden border border-gray-700 text-[10px]">
+            <button
+              onClick={() => setViewMode('code')}
+              className={cn('flex items-center gap-1 px-2 py-1 transition-colors',
+                viewMode === 'code' ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:text-gray-200')}
+            >
+              <Braces className="w-3 h-3" /> Code
+            </button>
+            {canTree && (
+              <button
+                onClick={() => setViewMode('tree')}
+                className={cn('flex items-center gap-1 px-2 py-1 transition-colors',
+                  viewMode === 'tree' ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:text-gray-200')}
+              >
+                <List className="w-3 h-3" /> Tree
+              </button>
+            )}
+          </div>
+
+          {viewMode === 'code' && (
+            <button
+              onClick={() => setBeautify((b) => !b)}
+              className={cn('flex items-center gap-1 rounded px-2 py-1 text-[10px] font-medium transition-colors border',
+                beautify
+                  ? 'bg-indigo-600/20 border-indigo-500/40 text-indigo-300'
+                  : 'border-gray-700 text-gray-400 hover:text-gray-200',
+              )}
+            >
+              Beautify
+            </button>
+          )}
+
+          <div className="ml-auto">
+            <CopyBtn text={typeof parsed === 'string' ? parsed : JSON.stringify(parsed, null, 2)} />
+          </div>
+        </div>
+      )}
+
+      {/* Content area */}
+      <div className="flex-1 min-h-0 bg-gray-900 overflow-hidden">
         {isLoading && (
-          <div className="flex items-center gap-2 text-xs text-gray-400">
-            <Loader2 className="w-3 h-3 animate-spin" /> Loading…
+          <div className="flex items-center gap-2 p-4 text-xs text-gray-400">
+            <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading…
           </div>
         )}
         {isError && (
-          <div className="flex items-start gap-2">
+          <div className="flex items-start gap-2 p-4">
             <AlertCircle className="w-3.5 h-3.5 text-red-400 shrink-0 mt-0.5" />
             <div>
-              <p className="text-xs text-red-500 font-medium">Failed to load blob</p>
-              <p className="text-[11px] text-red-400 font-mono mt-0.5 break-all">{(error as any)?.message || 'Unknown error'}</p>
+              <p className="text-xs text-red-400 font-medium">Failed to load blob</p>
+              <p className="text-[10px] text-red-500/70 font-mono mt-1 break-all">{(error as any)?.message ?? 'Unknown error'}</p>
             </div>
           </div>
         )}
-        {!isLoading && !isError && content === null && (
-          <p className="text-xs text-gray-400 italic">Blob not found or empty at this path</p>
+        {!isLoading && !isError && !text && (
+          <p className="p-4 text-xs text-gray-500 italic">Empty or no content at this path.</p>
         )}
-        {!isLoading && !isError && content !== null && <JsonViewer data={content} />}
+        {!isLoading && !isError && text && viewMode === 'code' && <CodeView text={text} />}
+        {!isLoading && !isError && text && viewMode === 'tree' && canTree && <TreeView data={parsed} />}
       </div>
     </div>
   );
@@ -379,61 +569,62 @@ function TaskSidePanel({ task, onClose }: { task: Task; onClose: () => void }) {
         ))}
       </div>
 
-      {/* Tab content */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-3">
-        {activeTab === 'input' && (
-          task.inputDataPath
-            ? <BlobPanel path={task.inputDataPath} label="Input / Request payload" />
-            : <p className="text-xs text-gray-400 italic">No input path stored</p>
-        )}
-        {activeTab === 'output' && (
-          task.outputDataPath
-            ? <BlobPanel path={task.outputDataPath} label="Output payload" />
-            : <p className="text-xs text-gray-400 italic">No output path stored</p>
-        )}
-        {activeTab === 'http' && (
-          task.httpMetadataPath
-            ? <BlobPanel path={task.httpMetadataPath} label="HTTP request / response" />
-            : <p className="text-xs text-gray-400 italic">No HTTP metadata path stored</p>
-        )}
-        {activeTab === 'timeline' && (
-          <div className="space-y-3">
-            <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Status history</p>
-            <div className="relative pl-5">
-              <div className="absolute left-1.5 top-0 bottom-0 w-px bg-gray-200" />
-              {task.timestamps.map((t, i) => (
-                <div key={i} className="relative flex items-start gap-3 mb-3">
-                  <div className="absolute -left-3.5 top-0.5">
-                    <StatusDot status={t.status} />
-                  </div>
-                  <div className="ml-1">
-                    <div className="flex items-center gap-2">
-                      <Badge variant={statusVariant[t.status] || 'muted'}>{t.status}</Badge>
-                      <span className="text-[10px] text-gray-400">{formatDate(t.timestamp)}</span>
-                    </div>
-                    {t.error && <p className="text-xs text-red-500 mt-0.5 font-mono">{t.error}</p>}
-                  </div>
+      {/* Tab content — payload tabs fill remaining height; timeline scrolls normally */}
+      {activeTab === 'timeline' ? (
+        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+          <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Status history</p>
+          <div className="relative pl-5">
+            <div className="absolute left-1.5 top-0 bottom-0 w-px bg-gray-200" />
+            {task.timestamps.map((t, i) => (
+              <div key={i} className="relative flex items-start gap-3 mb-3">
+                <div className="absolute -left-3.5 top-0.5">
+                  <StatusDot status={t.status} />
                 </div>
+                <div className="ml-1">
+                  <div className="flex items-center gap-2">
+                    <Badge variant={statusVariant[t.status] || 'muted'}>{t.status}</Badge>
+                    <span className="text-[10px] text-gray-400">{formatDate(t.timestamp)}</span>
+                  </div>
+                  {t.error && <p className="text-xs text-red-500 mt-0.5 font-mono">{t.error}</p>}
+                </div>
+              </div>
+            ))}
+          </div>
+          {(task.inputDataPath || task.outputDataPath || task.httpMetadataPath) && (
+            <div className="pt-3 border-t border-gray-100 space-y-1">
+              <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Blob paths</p>
+              {[
+                { label: 'in', path: task.inputDataPath },
+                { label: 'out', path: task.outputDataPath },
+                { label: 'http', path: task.httpMetadataPath },
+              ].filter((x) => x.path).map(({ label, path }) => (
+                <p key={label} className="text-[10px] font-mono text-gray-400 break-all">
+                  <span className="text-gray-300">{label}: </span>{path}
+                </p>
               ))}
             </div>
-
-            {(task.inputDataPath || task.outputDataPath || task.httpMetadataPath) && (
-              <div className="pt-3 border-t border-gray-100 space-y-1">
-                <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Blob paths</p>
-                {[
-                  { label: 'in', path: task.inputDataPath },
-                  { label: 'out', path: task.outputDataPath },
-                  { label: 'http', path: task.httpMetadataPath },
-                ].filter((x) => x.path).map(({ label, path }) => (
-                  <p key={label} className="text-[10px] font-mono text-gray-400 break-all">
-                    <span className="text-gray-300">{label}: </span>{path}
-                  </p>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-      </div>
+          )}
+        </div>
+      ) : (
+        /* Payload tabs — BlobPanel fills the full remaining height */
+        <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+          {activeTab === 'input' && (
+            task.inputDataPath
+              ? <BlobPanel path={task.inputDataPath} label="Request payload" />
+              : <p className="p-4 text-xs text-gray-400 italic">No input path stored</p>
+          )}
+          {activeTab === 'output' && (
+            task.outputDataPath
+              ? <BlobPanel path={task.outputDataPath} label="Output payload" />
+              : <p className="p-4 text-xs text-gray-400 italic">No output path stored</p>
+          )}
+          {activeTab === 'http' && (
+            task.httpMetadataPath
+              ? <BlobPanel path={task.httpMetadataPath} label="HTTP response" />
+              : <p className="p-4 text-xs text-gray-400 italic">No HTTP metadata path stored</p>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -463,13 +654,13 @@ export function JobDetailView({ jobId }: { jobId: string }) {
   };
 
   return (
-    <div className="flex flex-col lg:flex-row gap-5 min-h-0">
-      {/* ── Left: job info + flow ── */}
-      <div className={cn('flex-1 min-w-0 space-y-4', selectedTask && 'lg:max-w-[calc(100%-380px)]')}>
+    <>
+      {/* ── Job info + flow (always full-width now) ── */}
+      <div className="space-y-4">
         {/* Breadcrumb */}
         <div className="flex items-center gap-2 text-sm text-gray-500">
           <button onClick={() => router.back()} className="flex items-center gap-1 hover:text-gray-700">
-            <ArrowLeft className="w-3.5 h-3.5" /> Failed Jobs
+            <ArrowLeft className="w-3.5 h-3.5" /> Back
           </button>
           <ChevronRight className="w-3.5 h-3.5" />
           <span className="font-mono text-gray-700 text-xs truncate">{jobId}</span>
@@ -477,7 +668,6 @@ export function JobDetailView({ jobId }: { jobId: string }) {
 
         {/* Job summary card */}
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-          {/* Status stripe */}
           <div className={cn('h-1', getColor(job.status).strip)} />
           <div className="p-4 sm:p-5">
             <div className="flex items-start gap-3">
@@ -561,12 +751,27 @@ export function JobDetailView({ jobId }: { jobId: string }) {
         </div>
       </div>
 
-      {/* ── Right: detail panel ── */}
+      {/* ── Left-side drawer overlay ── */}
       {selectedTask && (
-        <div className="w-full lg:w-[370px] lg:shrink-0 bg-white rounded-xl border border-gray-200 overflow-hidden flex flex-col lg:sticky lg:top-4 lg:max-h-[calc(100vh-100px)]">
-          <TaskSidePanel task={selectedTask} onClose={() => setSelectedTask(null)} />
-        </div>
+        <>
+          {/* Backdrop — click to close */}
+          <div
+            className="fixed inset-0 z-40 bg-black/30 backdrop-blur-[1px] animate-fade-in"
+            onClick={() => setSelectedTask(null)}
+          />
+
+          {/* Drawer panel — slides in from the right, 80% wide */}
+          <div
+            className={cn(
+              'fixed inset-y-0 right-0 z-50 w-[80vw] max-w-3xl',
+              'bg-white shadow-2xl flex flex-col',
+              'animate-slide-in-right',
+            )}
+          >
+            <TaskSidePanel task={selectedTask} onClose={() => setSelectedTask(null)} />
+          </div>
+        </>
       )}
-    </div>
+    </>
   );
 }

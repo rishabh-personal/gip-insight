@@ -10,15 +10,19 @@ import { DipJobsModule } from './dip-jobs/dip-jobs.module';
 import { TraceModule } from './trace/trace.module';
 import { SyncGapModule } from './sync-gap/sync-gap.module';
 import { HealthModule } from './health/health.module';
+import { FailureTrackingModule } from './failure-tracking/failure-tracking.module';
 
 function buildMongoUri(): string {
-  const raw = process.env.MONGODB_URI || '';
-  if (!process.env.MONGO_PROXY_PORT) {
-    // No SOCKS5 proxy — use raw URI as-is (direct Atlas connection; may fail if IP not whitelisted)
-    return raw;
-  }
-  return raw;
+  return process.env.MONGODB_URI || '';
 }
+
+function buildInsightsMongoUri(): string {
+  return process.env.INSIGHTS_MONGODB_URI || process.env.MONGODB_URI || '';
+}
+
+const mongoProxyOpts = process.env.MONGO_PROXY_PORT
+  ? { proxyHost: '127.0.0.1', proxyPort: parseInt(process.env.MONGO_PROXY_PORT, 10) }
+  : {};
 
 @Module({
   imports: [
@@ -28,17 +32,22 @@ function buildMongoUri(): string {
       envFilePath: ['../../.env', '.env'],
     }),
 
+    // ── Primary GIP connection (read-only, prod data) ──────────────────────
     MongooseModule.forRoot(buildMongoUri(), {
       dbName: process.env.MONGODB_DB_NAME || 'gip-prod',
-      // Don't block NestJS startup — connect on first use
       lazyConnection: true,
-      // Route Atlas traffic through the SOCKS5 proxy when it is available
-      ...(process.env.MONGO_PROXY_PORT
-        ? {
-            proxyHost: '127.0.0.1',
-            proxyPort: parseInt(process.env.MONGO_PROXY_PORT, 10),
-          }
-        : {}),
+      ...mongoProxyOpts,
+      serverSelectionTimeoutMS: 30000,
+      connectTimeoutMS: 30000,
+      socketTimeoutMS: 60000,
+    }),
+
+    // ── Insights connection (read-write, separate DB, no GIP interference) ─
+    MongooseModule.forRoot(buildInsightsMongoUri(), {
+      connectionName: 'insights',
+      dbName: process.env.INSIGHTS_MONGODB_DB || 'gip-insights',
+      lazyConnection: true,
+      ...mongoProxyOpts,
       serverSelectionTimeoutMS: 30000,
       connectTimeoutMS: 30000,
       socketTimeoutMS: 60000,
@@ -51,9 +60,9 @@ function buildMongoUri(): string {
     TraceModule,
     SyncGapModule,
     HealthModule,
+    FailureTrackingModule,
   ],
   providers: [
-    // Rate-limit all routes globally: 120 requests / 60 s per IP
     { provide: APP_GUARD, useClass: ThrottlerGuard },
   ],
 })
