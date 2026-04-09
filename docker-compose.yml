@@ -11,8 +11,13 @@ services:
       - /opt/gip-insight/tunnel_key:/run/secrets/tunnel_key:ro
     env_file:
       # /opt/gip-insight/.env on the droplet — never committed to git.
-      # See .env.production.example for the required variables.
+      # Injected by the GitHub Actions deploy workflow from repository secrets.
       - .env
+    environment:
+      # Azure Blob Storage — sourced from .env (injected by CI).
+      # Required for reading task input/output payloads in the job detail view.
+      AZURE_STORAGE_CONNECTION_STRING: ${AZURE_STORAGE_CONNECTION_STRING}
+      AZURE_STORAGE_CONTAINER: ${AZURE_STORAGE_CONTAINER}
     networks:
       - gip-network
 
