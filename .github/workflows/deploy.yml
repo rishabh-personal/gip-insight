@@ -64,6 +64,11 @@ jobs:
             printf '\nAZURE_STORAGE_CONNECTION_STRING=%s' '${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}' >> /opt/gip-insight/.env.tmp
             printf '\nAZURE_STORAGE_CONTAINER=%s' '${{ secrets.AZURE_STORAGE_CONTAINER }}' >> /opt/gip-insight/.env.tmp
 
+            # Append dashboard authentication secrets
+            printf '\nDASHBOARD_USERNAME=%s' '${{ secrets.DASHBOARD_USERNAME }}' >> /opt/gip-insight/.env.tmp
+            printf '\nDASHBOARD_PASSWORD=%s' '${{ secrets.DASHBOARD_PASSWORD }}' >> /opt/gip-insight/.env.tmp
+            printf '\nAUTH_SECRET=%s' '${{ secrets.AUTH_SECRET }}' >> /opt/gip-insight/.env.tmp
+
             mv /opt/gip-insight/.env.tmp /opt/gip-insight/.env
             chmod 600 /opt/gip-insight/.env
 

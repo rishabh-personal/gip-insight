@@ -1,12 +1,20 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { cn } from '@/lib/utils';
 import {
   Building2, AlertCircle, Search, Activity, Zap,
-  ChevronLeft, ChevronRight, BookMarked,
+  ChevronLeft, ChevronRight, BookMarked, LogOut,
 } from 'lucide-react';
+
+function useLogout() {
+  const router = useRouter();
+  return async () => {
+    await fetch('/api/auth/logout', { method: 'POST' });
+    router.replace('/login');
+  };
+}
 
 const navItems = [
   { href: '/enterprises',      label: 'Enterprises',      icon: Building2,   description: 'All enterprise health'       },
@@ -24,6 +32,7 @@ interface SidebarProps {
 
 export function Sidebar({ collapsed, onToggle }: SidebarProps) {
   const pathname = usePathname();
+  const logout   = useLogout();
 
   return (
     <aside
@@ -76,7 +85,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
       </nav>
 
       {/* Footer */}
-      <div className="p-2 border-t border-gray-200">
+      <div className="p-2 border-t border-gray-200 space-y-0.5">
         <div
           className={cn('flex items-center rounded-lg px-3 py-2', collapsed ? 'justify-center px-0' : 'gap-2')}
           title={collapsed ? 'Production' : undefined}
@@ -84,6 +93,17 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
           <Activity className="w-3.5 h-3.5 text-green-500 flex-shrink-0" />
           {!collapsed && <span className="text-xs text-gray-500">Production</span>}
         </div>
+        <button
+          onClick={logout}
+          title={collapsed ? 'Sign out' : undefined}
+          className={cn(
+            'w-full flex items-center rounded-lg text-xs text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors py-2',
+            collapsed ? 'justify-center px-0' : 'gap-2 px-3',
+          )}
+        >
+          <LogOut className="w-3.5 h-3.5 flex-shrink-0" />
+          {!collapsed && 'Sign out'}
+        </button>
       </div>
     </aside>
   );
