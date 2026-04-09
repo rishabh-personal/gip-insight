@@ -58,11 +58,13 @@ export class DipJobsController {
   @ApiOperation({ summary: 'All / success / failed jobs for an enterprise+connector (connector log view)' })
   @ApiQuery({ name: 'status', required: false, description: 'all | success | failed | pending (default: all)' })
   @ApiQuery({ name: 'connectorId', required: false })
+  @ApiQuery({ name: 'search', required: false, description: 'Filter by refDocNo (invoice number) — case-insensitive substring' })
   async jobsList(
     @Param('ssoEnterpriseId') ssoEnterpriseId: string,
     @Query() pagination: PaginationDto,
     @Query('connectorId') connectorId?: string,
     @Query('status') status?: string,
+    @Query('search') search?: string,
   ) {
     const validStatuses = ['all', 'success', 'failed', 'pending'];
     const resolvedStatus = validStatuses.includes(status ?? '') ? (status as any) : 'all';
@@ -74,6 +76,7 @@ export class DipJobsController {
       to: pagination.toDate,
       page: pagination.page,
       limit: pagination.limit,
+      search: search?.trim() || undefined,
     });
   }
 

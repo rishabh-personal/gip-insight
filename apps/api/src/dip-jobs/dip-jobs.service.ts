@@ -201,6 +201,7 @@ export class DipJobsService {
     from: Date; to: Date;
     ssoEnterpriseId: string;
     connectorId?: string;
+    search?: string;
   }): Promise<any> {
     const dbName = await this.zwingStatus.getVendorDbName(opts.ssoEnterpriseId);
     if (!dbName) return { data: [], meta: { total: 0, page: opts.page, limit: opts.limit } };
@@ -217,6 +218,13 @@ export class DipJobsService {
     if (opts.connectorId) {
       failedPairs = failedPairs.filter(
         (p) => p.connectorId?.toString() === opts.connectorId,
+      );
+    }
+
+    if (opts.search) {
+      const needle = opts.search.toLowerCase();
+      failedPairs = failedPairs.filter((p) =>
+        p.refDocNo?.toLowerCase().includes(needle),
       );
     }
 
@@ -320,12 +328,12 @@ export class DipJobsService {
     to: Date;
     page: number;
     limit: number;
+    search?: string;
   }): Promise<any> {
     if (opts.status === 'failed') {
       return this.getFailedJobsForEnterprise({
         ...opts,
-        page: opts.page,
-        limit: opts.limit,
+        search: opts.search,
       });
     }
 
@@ -336,6 +344,9 @@ export class DipJobsService {
     if (opts.connectorId) match.connectorId = new Types.ObjectId(opts.connectorId);
     if (opts.status === 'success') match.status = 'success';
     if (opts.status === 'pending') match.status = { $in: ['pending', 'processing'] };
+    if (opts.search?.trim()) {
+      match.refDocNo = { $regex: opts.search.trim(), $options: 'i' };
+    }
 
     const skip = (opts.page - 1) * opts.limit;
     const [jobs, total] = await Promise.all([
