@@ -57,8 +57,13 @@ jobs:
           key:      ${{ secrets.DROPLET_SSH_KEY }}
           script: |
             mkdir -p /opt/gip-insight
-            # Write env file atomically (temp → rename) to avoid partial reads
+            # Write base env file atomically (temp → rename) to avoid partial reads
             printf '%s' '${{ secrets.PROD_ENV }}' > /opt/gip-insight/.env.tmp
+
+            # Append Azure Blob Storage credentials (stored as dedicated secrets)
+            printf '\nAZURE_STORAGE_CONNECTION_STRING=%s' '${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}' >> /opt/gip-insight/.env.tmp
+            printf '\nAZURE_STORAGE_CONTAINER=%s' '${{ secrets.AZURE_STORAGE_CONTAINER }}' >> /opt/gip-insight/.env.tmp
+
             mv /opt/gip-insight/.env.tmp /opt/gip-insight/.env
             chmod 600 /opt/gip-insight/.env
 
