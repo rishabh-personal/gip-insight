@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
@@ -10,8 +10,19 @@ import { cn } from '@/lib/utils';
 import { PageLoader, ErrorState, EmptyState } from '@/components/ui/loading';
 import {
   ArrowLeft, ChevronRight, RefreshCw, CheckCircle2,
-  XCircle, Clock, AlertCircle, Activity, ExternalLink,
+  XCircle, Clock, AlertCircle, Activity, ExternalLink, Search, X,
 } from 'lucide-react';
+
+// ─── Debounce hook ────────────────────────────────────────────────────────────
+
+function useDebounce<T>(value: T, delay = 400): T {
+  const [debouncedValue, setDebouncedValue] = useState<T>(value);
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedValue(value), delay);
+    return () => clearTimeout(timer);
+  }, [value, delay]);
+  return debouncedValue;
+}
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -151,11 +162,17 @@ export function ConnectorLogsView({ ssoEnterpriseId }: { ssoEnterpriseId: string
   const connectorName = params.get('connectorName') ?? 'Connector';
   const initialStatus = (params.get('status') as LogStatus) ?? 'all';
 
-  const [status, setStatus] = useState<LogStatus>(initialStatus);
-  const [page, setPage]     = useState(1);
+  const [status, setStatus]   = useState<LogStatus>(initialStatus);
+  const [page, setPage]       = useState(1);
+  const [searchInput, setSearchInput] = useState('');
+  const search = useDebounce(searchInput, 400);
+  const searchRef = useRef<HTMLInputElement>(null);
+
+  // Reset page when search or status changes
+  useEffect(() => { setPage(1); }, [search, status]);
 
   const { data, isLoading, isError, isFetching, refetch } = useQuery({
-    queryKey: ['connector-logs', ssoEnterpriseId, connectorId, status, from, to, page],
+    queryKey: ['connector-logs', ssoEnterpriseId, connectorId, status, from, to, page, search],
     queryFn: () => getConnectorJobs(ssoEnterpriseId, {
       connectorId,
       status,
@@ -163,6 +180,7 @@ export function ConnectorLogsView({ ssoEnterpriseId }: { ssoEnterpriseId: string
       to,
       page,
       limit: 30,
+      search: search || undefined,
     }),
     staleTime: 30_000,
     placeholderData: (prev) => prev,
@@ -206,39 +224,81 @@ export function ConnectorLogsView({ ssoEnterpriseId }: { ssoEnterpriseId: string
         </button>
       </div>
 
-      {/* Status tabs */}
-      <div className="flex border-b border-gray-200 gap-1">
-        {STATUS_TABS.map(({ key, label, icon: Icon, cls }) => (
-          <button
-            key={key}
-            onClick={() => { setStatus(key); setPage(1); }}
-            className={cn(
-              'flex items-center gap-1.5 px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium border-b-2 -mb-px transition-colors whitespace-nowrap',
-              status === key
-                ? `border-indigo-600 ${cls}`
-                : 'border-transparent text-gray-500 hover:text-gray-700',
+      {/* Status tabs + search bar row */}
+      <div className="flex flex-col gap-0 border-b border-gray-200">
+        <div className="flex items-center gap-2">
+          {/* Tabs */}
+          <div className="flex gap-1 flex-1 overflow-x-auto">
+            {STATUS_TABS.map(({ key, label, icon: Icon, cls }) => (
+              <button
+                key={key}
+                onClick={() => setStatus(key)}
+                className={cn(
+                  'flex items-center gap-1.5 px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium border-b-2 -mb-px transition-colors whitespace-nowrap',
+                  status === key
+                    ? `border-indigo-600 ${cls}`
+                    : 'border-transparent text-gray-500 hover:text-gray-700',
+                )}
+              >
+                <Icon className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">{label}</span>
+                <span className="sm:hidden">{label.slice(0, 3)}</span>
+              </button>
+            ))}
+          </div>
+
+          {/* Inline search */}
+          <div className="relative shrink-0 mb-1">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
+            <input
+              ref={searchRef}
+              type="text"
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              placeholder="Search ref doc…"
+              className="pl-8 pr-7 py-1.5 text-xs rounded-lg border border-gray-200 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-transparent w-44 sm:w-56 transition-all"
+            />
+            {searchInput && (
+              <button
+                onClick={() => { setSearchInput(''); searchRef.current?.focus(); }}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-500"
+              >
+                <X className="w-3 h-3" />
+              </button>
             )}
-          >
-            <Icon className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">{label}</span>
-            <span className="sm:hidden">{label.slice(0, 3)}</span>
-          </button>
-        ))}
+          </div>
+        </div>
       </div>
 
-      {/* Count */}
+      {/* Count + search hint */}
       {!isLoading && (
-        <p className="text-xs text-gray-400">
-          {meta.total ?? 0} job{(meta.total ?? 0) !== 1 ? 's' : ''}
-          {status !== 'all' && ` with status: ${status}`}
-        </p>
+        <div className="flex items-center gap-2 text-xs text-gray-400">
+          <span>
+            {meta.total ?? 0} job{(meta.total ?? 0) !== 1 ? 's' : ''}
+            {status !== 'all' && ` · ${status}`}
+          </span>
+          {search && (
+            <span className="inline-flex items-center gap-1 bg-indigo-50 text-indigo-600 rounded-full px-2 py-0.5 text-[10px] font-medium">
+              <Search className="w-2.5 h-2.5" />
+              &ldquo;{search}&rdquo;
+              <button onClick={() => setSearchInput('')} className="ml-0.5 hover:text-indigo-800">
+                <X className="w-2.5 h-2.5" />
+              </button>
+            </span>
+          )}
+          {isFetching && <RefreshCw className="w-3 h-3 animate-spin text-indigo-400" />}
+        </div>
       )}
 
       {/* Mobile cards */}
       <div className="md:hidden space-y-2">
         {isLoading && <PageLoader />}
         {!isLoading && jobs.length === 0 && (
-          <EmptyState message={`No ${status === 'all' ? '' : status + ' '}jobs found for this connector in the selected window.`} />
+          <EmptyState message={
+            search
+              ? `No ${status === 'all' ? '' : status + ' '}jobs matching "${search}".`
+              : `No ${status === 'all' ? '' : status + ' '}jobs found for this connector in the selected window.`
+          } />
         )}
         {jobs.map((job) => <JobCard key={job._id} job={job} from={from} to={to} />)}
       </div>
@@ -270,8 +330,15 @@ export function ConnectorLogsView({ ssoEnterpriseId }: { ssoEnterpriseId: string
                   <td colSpan={6} className="py-10 text-center">
                     <AlertCircle className="w-5 h-5 text-gray-200 mx-auto mb-2" />
                     <p className="text-sm text-gray-400">
-                      No {status === 'all' ? '' : status + ' '}jobs found for this connector.
+                      {search
+                        ? `No ${status === 'all' ? '' : status + ' '}jobs matching "${search}".`
+                        : `No ${status === 'all' ? '' : status + ' '}jobs found for this connector.`}
                     </p>
+                    {search && (
+                      <button onClick={() => setSearchInput('')} className="mt-2 text-xs text-indigo-500 hover:underline">
+                        Clear search
+                      </button>
+                    )}
                   </td>
                 </tr>
               )}
