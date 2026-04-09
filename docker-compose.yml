@@ -27,8 +27,15 @@ services:
     restart: unless-stopped
     ports:
       - "4000:3000"
+    env_file:
+      # Same .env as the API — the web container reads only the auth vars from it.
+      - .env
     environment:
       NODE_ENV: production
+      # Dashboard login credentials — sourced from .env (injected by CI).
+      DASHBOARD_USERNAME: ${DASHBOARD_USERNAME}
+      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD}
+      AUTH_SECRET: ${AUTH_SECRET}
     depends_on:
       - gip-api
     networks:
