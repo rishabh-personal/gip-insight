@@ -12,9 +12,15 @@ const nextConfig: NextConfig = {
         ? 'http://gip-api:3001'
         : 'http://localhost:3001';
     return [
+      // Proxy only NestJS routes — /api/auth/* is handled locally by Next.js
+      // route handlers and must NOT be forwarded to the backend.
       {
-        source: '/api/:path*',
-        destination: `${apiBase}/api/:path*`,
+        source: '/api/dashboard/:path*',
+        destination: `${apiBase}/api/dashboard/:path*`,
+      },
+      {
+        source: '/api/health',
+        destination: `${apiBase}/api/health`,
       },
     ];
   },

@@ -1,12 +1,11 @@
 'use client';
 
 import { useState, useTransition } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useSearchParams } from 'next/navigation';
 import { Eye, EyeOff, Loader2, AlertCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 export function LoginForm() {
-  const router     = useRouter();
   const params     = useSearchParams();
   const redirectTo = params.get('from') || '/enterprises';
 
@@ -29,8 +28,10 @@ export function LoginForm() {
         });
 
         if (res.ok) {
-          router.replace(redirectTo);
-          router.refresh();
+          // Full page reload so the browser re-fetches HTML with the new cookie
+          // instead of doing a client-side RSC navigation that the middleware
+          // would intercept before the cookie is visible.
+          window.location.href = redirectTo;
         } else {
           const body = await res.json().catch(() => ({}));
           setError(body.error || 'Login failed. Check your credentials.');
