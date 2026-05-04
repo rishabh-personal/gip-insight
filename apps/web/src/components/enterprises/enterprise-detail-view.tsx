@@ -12,7 +12,7 @@ import { StatCard } from '@/components/ui/stat-card';
 import { Badge } from '@/components/ui/badge';
 import {
   ChevronRight, ChevronDown, ChevronUp, AlertCircle, Activity, ArrowLeft, GitBranch, Database,
-  Copy, Check, ExternalLink, CheckCircle2,
+  Copy, Check, ExternalLink, CheckCircle2, Clock,
 } from 'lucide-react';
 
 export function EnterpriseDetailView({ ssoEnterpriseId }: { ssoEnterpriseId: string }) {
@@ -62,14 +62,24 @@ export function EnterpriseDetailView({ ssoEnterpriseId }: { ssoEnterpriseId: str
               {enterprise?.baCode && <Badge variant="muted">{enterprise?.baCode}</Badge>}
             </div>
           </div>
-          <Link
-            href={`/enterprises/${ssoEnterpriseId}/sync-gap?from=${from}&to=${to}`}
-            className="flex items-center gap-1.5 text-xs sm:text-sm text-indigo-600 hover:text-indigo-800 font-medium shrink-0"
-          >
-            <Activity className="w-4 h-4" />
-            <span className="hidden sm:inline">Sync Gap Analysis</span>
-            <span className="sm:hidden">Sync Gap</span>
-          </Link>
+          <div className="flex items-center gap-2 shrink-0">
+            <Link
+              href={`/enterprises/${ssoEnterpriseId}/sync-gap?from=${from}&to=${to}`}
+              className="flex items-center gap-1.5 text-xs sm:text-sm text-indigo-600 hover:text-indigo-800 font-medium"
+            >
+              <Activity className="w-4 h-4" />
+              <span className="hidden sm:inline">Sync Gap</span>
+            </Link>
+            <span className="text-gray-200">|</span>
+            <Link
+              href={`/enterprises/${ssoEnterpriseId}/invoice-timeline?from=${from}&to=${to}`}
+              className="flex items-center gap-1.5 text-xs sm:text-sm text-indigo-600 hover:text-indigo-800 font-medium"
+            >
+              <Clock className="w-4 h-4" />
+              <span className="hidden sm:inline">Invoice Timeline</span>
+              <span className="sm:hidden">Timeline</span>
+            </Link>
+          </div>
         </div>
       </div>
 
@@ -102,9 +112,6 @@ export function EnterpriseDetailView({ ssoEnterpriseId }: { ssoEnterpriseId: str
                 ssoEnterpriseId={ssoEnterpriseId}
                 from={from}
                 to={to}
-                onViewJobs={() =>
-                  router.push(`/enterprises/${ssoEnterpriseId}/logs?connectorId=${c._id}&connectorName=${encodeURIComponent(c.name)}&status=failed&from=${from}&to=${to}`)
-                }
               />
             ))}
           </div>
@@ -136,18 +143,18 @@ function CopyIconButton({ text, title }: { text: string; title?: string }) {
   );
 }
 
+// ── Connector Card ────────────────────────────────────────────────────────────
+
 function ConnectorCard({
   connector: c,
   ssoEnterpriseId,
   from,
   to,
-  onViewJobs,
 }: {
   connector: any;
   ssoEnterpriseId: string;
   from: string;
   to: string;
-  onViewJobs: () => void;
 }) {
   const m = c.metrics || {};
   const missingList: string[] = m.missingRefDocNos ?? [];
@@ -161,6 +168,7 @@ function ConnectorCard({
   const statusLabel = isDeleted ? 'Deleted' : c.isEnabled ? 'Active' : 'Disabled';
 
   const hasEventMetrics = c.mappings?.some((mp: any) => mp.metrics !== null);
+  const hasSourceConfig  = c.mappings?.some((mp: any) => mp.metrics?.sourceConfigured);
 
   return (
     <div className="bg-white rounded-xl border border-gray-200 p-4">
@@ -322,10 +330,13 @@ function ConnectorCard({
       {/* Event-wise breakdown table — horizontally scrollable */}
       {c.mappings?.length > 0 && (
         <div className="mt-3 pt-3 border-t border-gray-100 overflow-x-auto">
-          <table className="w-full text-xs min-w-[540px]">
+          <table className="w-full text-xs min-w-[580px]">
             <thead>
               <tr className="text-gray-400 text-left">
                 <th className="pb-1.5 font-medium">Event</th>
+                {hasSourceConfig && (
+                  <th className="pb-1.5 font-medium text-right pr-3" title="Source transaction count from Zwing">Src</th>
+                )}
                 <th className="pb-1.5 font-medium text-right pr-3">OK</th>
                 <th className="pb-1.5 font-medium text-right pr-3">Fail</th>
                 <th className="pb-1.5 font-medium text-right pr-3">Pend</th>
@@ -350,6 +361,20 @@ function ConnectorCard({
                         {!mp.isEnabled && <span className="text-[10px] text-yellow-500 font-medium">off</span>}
                       </div>
                     </td>
+                    {/* Source count — only render column when at least one event has config */}
+                    {hasSourceConfig && (
+                      <td className="py-1.5 pr-3 text-right">
+                        {em?.sourceConfigured ? (
+                          em.sourceCount != null ? (
+                            <span className="font-medium text-gray-600">{em.sourceCount.toLocaleString()}</span>
+                          ) : (
+                            <span className="text-yellow-400 text-[10px]" title="MySQL query failed">err</span>
+                          )
+                        ) : (
+                          <span className="text-gray-300">—</span>
+                        )}
+                      </td>
+                    )}
                     <td className="py-1.5 pr-3 text-right">
                       {em ? <span className={cn('font-medium', em.succeeded > 0 ? 'text-green-600' : 'text-gray-400')}>{em.succeeded}</span> : <span className="text-gray-300">—</span>}
                     </td>
@@ -361,7 +386,12 @@ function ConnectorCard({
                     </td>
                     <td className="py-1.5 pr-3 text-right">
                       {em && em.missing != null ? (
-                        <span className={cn('font-medium', em.missing > 0 ? 'text-slate-600' : 'text-gray-300')}>{em.missing}</span>
+                        <span
+                          className={cn('font-medium', em.missing > 0 ? 'text-slate-600' : 'text-gray-300')}
+                          title={em.sourceConfigured ? `Source: ${em.sourceCount} transactions` : 'Based on Zwing invoice count'}
+                        >
+                          {em.missing}
+                        </span>
                       ) : (
                         <span className="text-gray-300">—</span>
                       )}
@@ -391,6 +421,11 @@ function ConnectorCard({
           </table>
           {!hasEventMetrics && (
             <p className="text-xs text-gray-400 mt-1">No jobs found for this window</p>
+          )}
+          {hasSourceConfig && (
+            <p className="text-[10px] text-gray-400 mt-1">
+              Src = source transaction count from Zwing. Miss = Src − (OK + Fail + Pend).
+            </p>
           )}
         </div>
       )}

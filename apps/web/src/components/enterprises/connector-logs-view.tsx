@@ -78,10 +78,6 @@ function fmtDate(iso: string) {
   });
 }
 
-function Skeleton({ w = 'w-12' }: { w?: string }) {
-  return <span className={cn('inline-block h-3.5 rounded bg-gray-100 animate-pulse', w)} />;
-}
-
 // ─── Job row (mobile card) ────────────────────────────────────────────────────
 
 function JobCard({ job, from, to }: { job: Job; from: string; to: string }) {

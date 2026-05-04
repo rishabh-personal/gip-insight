@@ -17,10 +17,10 @@ function useLogout() {
 }
 
 const navItems = [
-  { href: '/enterprises',      label: 'Enterprises',      icon: Building2,   description: 'All enterprise health'       },
-  { href: '/jobs',             label: 'Failed Jobs',       icon: AlertCircle, description: 'Failed delivery jobs'        },
-  { href: '/trace',            label: 'Invoice Trace',     icon: Search,      description: 'End-to-end lookup'           },
-  { href: '/failure-analysis', label: 'Failure Analysis',  icon: BookMarked,  description: 'Root cause & pattern tracking' },
+  { href: '/enterprises',      label: 'Enterprises',     icon: Building2   },
+  { href: '/jobs',             label: 'Failed Jobs',      icon: AlertCircle },
+  { href: '/trace',            label: 'Invoice Trace',    icon: Search      },
+  { href: '/failure-analysis', label: 'Failure Analysis', icon: BookMarked  },
 ];
 
 interface SidebarProps {

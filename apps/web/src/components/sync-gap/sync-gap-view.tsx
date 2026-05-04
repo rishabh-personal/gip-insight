@@ -7,11 +7,22 @@ import { useDateRange } from '@/hooks/use-date-range';
 import { formatDate, cn } from '@/lib/utils';
 import { PageLoader, ErrorState, EmptyState } from '@/components/ui/loading';
 import { StatCard } from '@/components/ui/stat-card';
-import { ArrowLeft, AlertTriangle, CheckCircle2, RefreshCw, Zap, Clock, ExternalLink, Copy, Check } from 'lucide-react';
+import {
+  ArrowLeft,
+  AlertTriangle,
+  XCircle,
+  CheckCircle2,
+  RefreshCw,
+  Zap,
+  Clock,
+  ExternalLink,
+  Copy,
+  Check,
+} from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
 
-type TabId = 'missed' | 'pending';
+type TabId = 'missing' | 'failed' | 'pending';
 
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
@@ -42,7 +53,7 @@ export function SyncGapView({ ssoEnterpriseId }: { ssoEnterpriseId: string }) {
 
   const { from, to } = useDateRange();
 
-  const [activeTab, setActiveTab] = useState<TabId>('missed');
+  const [activeTab, setActiveTab] = useState<TabId>('missing');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [retriggerResult, setRetriggerResult] = useState<{ updated: number; batches: number } | null>(null);
 
@@ -54,6 +65,7 @@ export function SyncGapView({ ssoEnterpriseId }: { ssoEnterpriseId: string }) {
   const { data: pendingData, isLoading: pendingLoading, refetch: pendingRefetch, isFetching: pendingFetching } = useQuery({
     queryKey: ['pending-invoices', ssoEnterpriseId, from, to],
     queryFn: () => getPendingInvoices(ssoEnterpriseId, { from, to }),
+    enabled: activeTab === 'pending',
   });
 
   const retriggerMutation = useMutation({
@@ -79,12 +91,26 @@ export function SyncGapView({ ssoEnterpriseId }: { ssoEnterpriseId: string }) {
   const d = data?.data;
   if (!d) return <EmptyState message="No data for this enterprise" />;
 
-  const isRefreshing = isFetching && !isLoading;
+  const isRefreshing    = isFetching && !isLoading;
   const pendingInvoices = pendingData?.data?.pendingInvoices || [];
-  const pendingCount = pendingData?.data?.count ?? 0;
+  const pendingCount    = pendingData?.data?.count ?? 0;
 
-  // Active list depends on the tab
-  const activeList = activeTab === 'missed' ? (d.missedEvents || []) : pendingInvoices;
+  // Response shape: d.missing.items / d.failed.items / pendingInvoices
+  const missingItems = d.missing?.items || [];
+  const failedItems  = d.failed?.items  || [];
+  const missingCount = d.missing?.count ?? missingItems.length;
+  const failedCount  = d.failed?.count  ?? failedItems.length;
+
+  const activeList: any[] =
+    activeTab === 'missing' ? missingItems :
+    activeTab === 'failed'  ? failedItems  :
+    pendingInvoices;
+
+  const handleTabChange = (tab: TabId) => {
+    setActiveTab(tab);
+    setSelected(new Set());
+    setRetriggerResult(null);
+  };
 
   const toggleAll = () => {
     if (selected.size === activeList.length) {
@@ -98,12 +124,6 @@ export function SyncGapView({ ssoEnterpriseId }: { ssoEnterpriseId: string }) {
     const next = new Set(selected);
     next.has(id) ? next.delete(id) : next.add(id);
     setSelected(next);
-  };
-
-  const handleTabChange = (tab: TabId) => {
-    setActiveTab(tab);
-    setSelected(new Set());
-    setRetriggerResult(null);
   };
 
   const handleRetrigger = () => {
@@ -134,12 +154,13 @@ export function SyncGapView({ ssoEnterpriseId }: { ssoEnterpriseId: string }) {
       {/* Header */}
       <div className="flex items-start justify-between">
         <div>
-          <h2 className="text-xl font-semibold text-gray-900">Sync Gap</h2>
+          <h2 className="text-xl font-semibold text-gray-900">
+            Sync Gap — {d.label ?? 'Invoices'}
+          </h2>
           <p className="text-sm text-gray-500 mt-1">
-            Zwing invoices vs GIP captured events
-            {d.enterprise?.dbName && (
-              <span className="font-mono text-xs ml-1">— {d.enterprise.dbName}</span>
-            )}
+            {d.enterprise?.dbName
+              ? <>Source ({d.enterprise.dbName}) vs GIP captured events</>
+              : 'Source vs GIP captured events'}
           </p>
         </div>
         <button
@@ -159,39 +180,61 @@ export function SyncGapView({ ssoEnterpriseId }: { ssoEnterpriseId: string }) {
 
       {/* KPI row */}
       <div className={cn('grid grid-cols-4 gap-4 transition-opacity duration-200', isRefreshing && 'opacity-40 pointer-events-none')}>
-        <StatCard label="Zwing Invoices" value={d.zwingCount ?? '—'} color="default" sub="in selected window" />
-        <StatCard label="GIP Events"     value={d.gipCount ?? 0}     color="blue"    sub="captured by Debezium" />
+        <StatCard label="Source Records" value={d.zwingCount ?? '—'} color="default" sub="in selected window" />
+        <StatCard label="GIP Captured"   value={d.gipCount ?? 0}     color="blue"    sub="unique records in GIP" />
         <StatCard
-          label="Sync Gap"
+          label="Total Gap"
           value={d.gap ?? '—'}
           color={d.gap > 0 ? 'red' : 'green'}
-          sub={d.gap > 0 ? 'invoices missed by GIP' : 'no gap detected'}
+          sub={d.gap > 0
+            ? `${missingCount} not received · ${failedCount} failed`
+            : 'all records delivered'}
         />
         <StatCard
           label="Sync Rate"
           value={`${d.syncRate ?? '—'}%`}
           color={d.syncRate >= 99 ? 'green' : d.syncRate >= 90 ? 'yellow' : 'red'}
-          sub="invoices captured"
+          sub="successfully delivered"
         />
       </div>
 
       {/* Tab switcher */}
       <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-lg w-fit">
+        {/* Missing tab */}
         <button
-          onClick={() => handleTabChange('missed')}
+          onClick={() => handleTabChange('missing')}
           className={cn(
             'flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md font-medium transition-colors',
-            activeTab === 'missed'
+            activeTab === 'missing'
               ? 'bg-white text-gray-900 shadow-sm'
               : 'text-gray-500 hover:text-gray-700',
           )}
         >
           <AlertTriangle className="w-3.5 h-3.5" />
-          Missed Events
-          {d.gap > 0 && (
-            <span className="ml-1 px-1.5 py-0.5 text-xs rounded-full bg-red-100 text-red-600">{d.gap}</span>
+          Not Received
+          {missingCount > 0 && (
+            <span className="ml-1 px-1.5 py-0.5 text-xs rounded-full bg-red-100 text-red-600">{missingCount}</span>
           )}
         </button>
+
+        {/* Failed tab */}
+        <button
+          onClick={() => handleTabChange('failed')}
+          className={cn(
+            'flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md font-medium transition-colors',
+            activeTab === 'failed'
+              ? 'bg-white text-gray-900 shadow-sm'
+              : 'text-gray-500 hover:text-gray-700',
+          )}
+        >
+          <XCircle className="w-3.5 h-3.5" />
+          Failed in GIP
+          {failedCount > 0 && (
+            <span className="ml-1 px-1.5 py-0.5 text-xs rounded-full bg-orange-100 text-orange-600">{failedCount}</span>
+          )}
+        </button>
+
+        {/* Pending tab */}
         <button
           onClick={() => handleTabChange('pending')}
           className={cn(
@@ -202,7 +245,7 @@ export function SyncGapView({ ssoEnterpriseId }: { ssoEnterpriseId: string }) {
           )}
         >
           <Clock className="w-3.5 h-3.5" />
-          Pending Invoices
+          Pending in GIP
           {pendingCount > 0 && (
             <span className="ml-1 px-1.5 py-0.5 text-xs rounded-full bg-yellow-100 text-yellow-600">{pendingCount}</span>
           )}
@@ -210,64 +253,87 @@ export function SyncGapView({ ssoEnterpriseId }: { ssoEnterpriseId: string }) {
       </div>
 
       {/* Content — dimmed while re-fetching */}
-      <div className={cn('space-y-6 transition-opacity duration-200', (isRefreshing || (activeTab === 'pending' && pendingFetching && !pendingLoading)) && 'opacity-40 pointer-events-none')}>
+      <div className={cn(
+        'space-y-6 transition-opacity duration-200',
+        (isRefreshing || (activeTab === 'pending' && pendingFetching && !pendingLoading)) && 'opacity-40 pointer-events-none',
+      )}>
 
-        {/* ── Missed Events tab ─────────────────────────────────────────── */}
-        {activeTab === 'missed' && (
-          <>
-            {d.gap > 0 ? (
-              <div className="flex items-start gap-3 p-4 bg-red-50 border border-red-200 rounded-xl">
-                <AlertTriangle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
-                <div>
-                  <p className="text-sm font-semibold text-red-700">
-                    {d.gap} invoice{d.gap > 1 ? 's' : ''} were not captured by GIP
-                  </p>
-                  <p className="text-xs text-red-600 mt-0.5">
-                    These invoices exist in Zwing but have no matching GIP job. Select them below and
-                    click <strong>Re-trigger</strong> to increment <code>sync_status</code> so Debezium re-emits the events.
-                  </p>
-                </div>
-              </div>
-            ) : d.zwingCount !== null ? (
-              <div className="flex items-center gap-3 p-4 bg-green-50 border border-green-200 rounded-xl">
-                <CheckCircle2 className="w-5 h-5 text-green-500" />
-                <p className="text-sm font-medium text-green-700">
-                  All Zwing invoices in this window have been captured by GIP — no sync gap detected.
+        {/* ── Not Received tab ──────────────────────────────────────────────── */}
+        {activeTab === 'missing' && (
+          missingCount > 0 ? (
+            <div className="flex items-start gap-3 p-4 bg-red-50 border border-red-200 rounded-xl">
+              <AlertTriangle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm font-semibold text-red-700">
+                  {missingCount} record{missingCount > 1 ? 's' : ''} were never received by GIP
+                </p>
+                <p className="text-xs text-red-600 mt-0.5">
+                  These exist in the source system but have no matching GIP job. Select them and click{' '}
+                  <strong>Re-trigger</strong> to increment <code>sync_status</code> so Debezium re-emits the events.
                 </p>
               </div>
-            ) : null}
-          </>
+            </div>
+          ) : d.zwingCount !== null ? (
+            <div className="flex items-center gap-3 p-4 bg-green-50 border border-green-200 rounded-xl">
+              <CheckCircle2 className="w-5 h-5 text-green-500" />
+              <p className="text-sm font-medium text-green-700">
+                All source records in this window have been received by GIP — no missing events.
+              </p>
+            </div>
+          ) : null
         )}
 
-        {/* ── Pending Invoices tab ───────────────────────────────────────── */}
-        {activeTab === 'pending' && (
-          <>
-            {pendingLoading ? (
-              <div className="flex items-center gap-2 text-sm text-gray-500 py-4">
-                <RefreshCw className="w-4 h-4 animate-spin" /> Loading pending invoices…
-              </div>
-            ) : pendingCount > 0 ? (
-              <div className="flex items-start gap-3 p-4 bg-yellow-50 border border-yellow-200 rounded-xl">
-                <Clock className="w-5 h-5 text-yellow-500 flex-shrink-0 mt-0.5" />
-                <div>
-                  <p className="text-sm font-semibold text-yellow-700">
-                    {pendingCount} invoice{pendingCount > 1 ? 's' : ''} are in-flight (pending/processing)
-                  </p>
-                  <p className="text-xs text-yellow-600 mt-0.5">
-                    GIP has captured these invoices but their jobs haven't resolved yet. If they've been stuck,
-                    select them and click <strong>Re-trigger</strong> to re-emit the events.
-                  </p>
-                </div>
-              </div>
-            ) : (
-              <div className="flex items-center gap-3 p-4 bg-green-50 border border-green-200 rounded-xl">
-                <CheckCircle2 className="w-5 h-5 text-green-500" />
-                <p className="text-sm font-medium text-green-700">
-                  No pending invoices — all captured invoices have resolved.
+        {/* ── Failed in GIP tab ─────────────────────────────────────────────── */}
+        {activeTab === 'failed' && (
+          failedCount > 0 ? (
+            <div className="flex items-start gap-3 p-4 bg-orange-50 border border-orange-200 rounded-xl">
+              <XCircle className="w-5 h-5 text-orange-500 flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm font-semibold text-orange-700">
+                  {failedCount} record{failedCount > 1 ? 's' : ''} were received by GIP but all job attempts failed
+                </p>
+                <p className="text-xs text-orange-600 mt-0.5">
+                  GIP captured these events but could not deliver them. Re-trigger to create a fresh job attempt.
                 </p>
               </div>
-            )}
-          </>
+            </div>
+          ) : (
+            <div className="flex items-center gap-3 p-4 bg-green-50 border border-green-200 rounded-xl">
+              <CheckCircle2 className="w-5 h-5 text-green-500" />
+              <p className="text-sm font-medium text-green-700">
+                No failed records — every captured event has at least one successful delivery.
+              </p>
+            </div>
+          )
+        )}
+
+        {/* ── Pending in GIP tab ────────────────────────────────────────────── */}
+        {activeTab === 'pending' && (
+          pendingLoading ? (
+            <div className="flex items-center gap-2 text-sm text-gray-500 py-4">
+              <RefreshCw className="w-4 h-4 animate-spin" /> Loading pending records…
+            </div>
+          ) : pendingCount > 0 ? (
+            <div className="flex items-start gap-3 p-4 bg-yellow-50 border border-yellow-200 rounded-xl">
+              <Clock className="w-5 h-5 text-yellow-500 flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm font-semibold text-yellow-700">
+                  {pendingCount} record{pendingCount > 1 ? 's' : ''} are in-flight (pending/processing)
+                </p>
+                <p className="text-xs text-yellow-600 mt-0.5">
+                  GIP captured these events but the jobs haven't resolved yet. If stuck, re-trigger to create
+                  a fresh attempt.
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center gap-3 p-4 bg-green-50 border border-green-200 rounded-xl">
+              <CheckCircle2 className="w-5 h-5 text-green-500" />
+              <p className="text-sm font-medium text-green-700">
+                No pending records — all captured events have resolved.
+              </p>
+            </div>
+          )
         )}
 
         {/* Re-trigger success result */}
@@ -277,7 +343,7 @@ export function SyncGapView({ ssoEnterpriseId }: { ssoEnterpriseId: string }) {
             <p className="text-sm text-indigo-700">
               <strong>{retriggerResult.updated}</strong> invoice{retriggerResult.updated !== 1 ? 's' : ''} updated
               across <strong>{retriggerResult.batches}</strong> batch{retriggerResult.batches !== 1 ? 'es' : ''}.
-              Debezium will re-emit events shortly — refresh in a few seconds to see the updated counts.
+              Debezium will re-emit events shortly — refresh in a few seconds.
             </p>
           </div>
         )}
@@ -288,21 +354,23 @@ export function SyncGapView({ ssoEnterpriseId }: { ssoEnterpriseId: string }) {
           </div>
         )}
 
-        {/* Invoice table — shared between both tabs */}
+        {/* Invoice table */}
         {activeList.length > 0 && (
           <div>
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-sm font-semibold text-gray-700">
-                {activeTab === 'missed'
-                  ? `Missed Events (${activeList.length}${d.gap > 500 ? '+' : ''})`
-                  : `Pending Invoices (${activeList.length})`}
+                {activeTab === 'missing'
+                  ? `Not Received (${activeList.length}${missingCount > 500 ? '+' : ''})`
+                  : activeTab === 'failed'
+                  ? `Failed in GIP (${activeList.length}${failedCount > 500 ? '+' : ''})`
+                  : `Pending in GIP (${activeList.length})`}
               </h3>
               <div className="flex items-center gap-2">
                 {selected.size > 0 && (
                   <span className="text-xs text-gray-500">{selected.size} selected</span>
                 )}
                 <button
-                  onClick={() => { activeTab === 'missed' ? refetch() : pendingRefetch(); }}
+                  onClick={() => { activeTab === 'pending' ? pendingRefetch() : refetch(); }}
                   disabled={isFetching || pendingFetching}
                   className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 px-2 py-1.5 border border-gray-200 rounded-lg bg-white"
                 >
@@ -342,7 +410,7 @@ export function SyncGapView({ ssoEnterpriseId }: { ssoEnterpriseId: string }) {
                     <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Store</th>
                     <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Type</th>
                     <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Sub Type</th>
-                    <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Zwing Status</th>
+                    <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Status</th>
                     {activeTab === 'pending' && (
                       <>
                         <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Last GIP Attempt</th>
@@ -422,9 +490,14 @@ export function SyncGapView({ ssoEnterpriseId }: { ssoEnterpriseId: string }) {
                 </tbody>
               </table>
 
-              {activeTab === 'missed' && d.gap > 500 && (
+              {activeTab === 'missing' && missingCount > 500 && (
                 <div className="px-4 py-3 border-t border-gray-100 bg-gray-50 text-xs text-gray-500">
-                  Showing first 500 of {d.gap} missed events
+                  Showing first 500 of {missingCount} not-received records
+                </div>
+              )}
+              {activeTab === 'failed' && failedCount > 500 && (
+                <div className="px-4 py-3 border-t border-gray-100 bg-gray-50 text-xs text-gray-500">
+                  Showing first 500 of {failedCount} failed records
                 </div>
               )}
             </div>

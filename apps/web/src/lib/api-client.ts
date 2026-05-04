@@ -12,10 +12,6 @@ export const api = axios.create({
 export const getEnterprises = (params: Record<string, any> = {}) =>
   api.get('/enterprises', { params }).then((r) => r.data);
 
-/** Unique apps across all connectors — for the filter dropdown. */
-export const getEnterpriseApps = () =>
-  api.get('/enterprises/apps').then((r) => r.data);
-
 /** Unique connector names across all enterprises — for the pin-as-tab dropdown. */
 export const getEnterpriseConnectors = () =>
   api.get('/enterprises/connectors').then((r) => r.data);
@@ -39,10 +35,11 @@ export const getPendingInvoices = (ssoEnterpriseId: string, params: Record<strin
 export const retriggerInvoices = (ssoEnterpriseId: string, invoiceIds: string[]) =>
   api.post(`/enterprises/${ssoEnterpriseId}/sync-gap/retrigger`, { invoiceIds }).then((r) => r.data);
 
-// ---- Jobs ----
-export const getJobSummary = (ssoEnterpriseId: string, params: Record<string, any> = {}) =>
-  api.get(`/enterprises/${ssoEnterpriseId}/jobs/summary`, { params }).then((r) => r.data);
+/** Per-invoice timeline: Zwing row + GIP status + sync delay. */
+export const getInvoiceTimeline = (ssoEnterpriseId: string, params: Record<string, any> = {}) =>
+  api.get(`/enterprises/${ssoEnterpriseId}/sync-gap/timeline`, { params }).then((r) => r.data);
 
+// ---- Jobs ----
 /** Async per-enterprise failed count + preview — called per-row on failed jobs page. */
 export const getEnterpriseFailedSummary = (ssoEnterpriseId: string, params: Record<string, any> = {}) =>
   api.get(`/enterprises/${ssoEnterpriseId}/jobs/failed-summary`, { params }).then((r) => r.data);
@@ -66,6 +63,14 @@ export const getConnectorJobs = (
 export const getBlobContent = (path: string) =>
   api.get('/jobs/blob', { params: { path } }).then((r) => r.data);
 
+
+// ---- Event Recon ----
+/**
+ * Per-outbound-event reconciliation: GIP job counts vs Zwing source counts
+ * across all connectors for an enterprise.
+ */
+export const getEventRecon = (ssoEnterpriseId: string, params: Record<string, any> = {}) =>
+  api.get(`/enterprises/${ssoEnterpriseId}/event-recon`, { params }).then((r) => r.data);
 
 // ---- Trace ----
 export const traceInvoice = (invoiceId: string, ssoEnterpriseId?: string) =>

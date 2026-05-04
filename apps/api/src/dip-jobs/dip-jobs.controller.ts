@@ -38,7 +38,6 @@ export class DipJobsController {
   @ApiOperation({ summary: 'List failed jobs across all or one enterprise (STORY-005)' })
   @ApiQuery({ name: 'ssoEnterpriseId', required: false })
   @ApiQuery({ name: 'connectorId', required: false })
-  @ApiQuery({ name: 'appId', required: false })
   async failedJobs(
     @Query() pagination: PaginationDto,
     @Query('ssoEnterpriseId') ssoEnterpriseId?: string,

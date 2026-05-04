@@ -39,23 +39,19 @@ export function useEnterpriseLabels() {
     setImportantIds((prev) => {
       const next = new Set(prev);
       next.has(id) ? next.delete(id) : next.add(id);
-      const stored = load();
-      stored.important = [...next];
-      persist(stored);
+      persist({ important: [...next], test: [...testIds] });
       return next;
     });
-  }, []);
+  }, [testIds]);
 
   const toggleTest = useCallback((id: string) => {
     setTestIds((prev) => {
       const next = new Set(prev);
       next.has(id) ? next.delete(id) : next.add(id);
-      const stored = load();
-      stored.test = [...next];
-      persist(stored);
+      persist({ important: [...importantIds], test: [...next] });
       return next;
     });
-  }, []);
+  }, [importantIds]);
 
   return {
     importantIds,

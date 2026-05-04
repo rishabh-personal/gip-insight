@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import Link from 'next/link';
 import {
@@ -19,8 +19,8 @@ import { cn } from '@/lib/utils';
 import {
   BookMarked, Plus, X, ChevronDown, ChevronUp,
   Pencil, Trash2, Check, ExternalLink, RefreshCw,
-  Tags, AlertTriangle, TrendingUp, Building2, Plug,
-  Clock, CheckCircle2, AlertCircle, Ban, MoreVertical,
+  Tags, AlertTriangle, TrendingUp, Plug,
+  Clock, CheckCircle2, AlertCircle, Ban,
 } from 'lucide-react';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -69,6 +69,15 @@ function Spinner() {
 }
 
 const COLORS = ['#ef4444','#f97316','#eab308','#22c55e','#3b82f6','#8b5cf6','#ec4899','#6b7280'];
+
+function useDebounce<T>(value: T, delay = 350): T {
+  const [debounced, setDebounced] = useState<T>(value);
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(value), delay);
+    return () => clearTimeout(t);
+  }, [value, delay]);
+  return debounced;
+}
 
 // ─── Category Manager Modal ───────────────────────────────────────────────────
 
@@ -461,7 +470,10 @@ export function FailureAnalysisView() {
   // ── Filters ───────────────────────────────────────────────────────────────
   const [status, setStatus] = useState<string>('');
   const [search, setSearch] = useState('');
+  const debouncedSearch = useDebounce(search, 350);
   const [page, setPage] = useState(1);
+
+  useEffect(() => { setPage(1); }, [debouncedSearch]);
 
   // ── Modals ────────────────────────────────────────────────────────────────
   const [showCategories, setShowCategories] = useState(false);
@@ -476,8 +488,8 @@ export function FailureAnalysisView() {
   const summaryQ = useQuery<any>({ queryKey: ['ft-summary'], queryFn: getFailureSummary, refetchInterval: 60_000 });
   const catsQ = useQuery<Category[]>({ queryKey: ['ft-categories'], queryFn: () => getFailureCategories() });
   const casesQ = useQuery<{ data: FailureCase[]; meta: { total: number; pages: number; page: number; limit: number } }>({
-    queryKey: ['ft-cases', status, search, page],
-    queryFn: () => getFailureCases({ status: status || undefined, search: search || undefined, page, limit: 30 }),
+    queryKey: ['ft-cases', status, debouncedSearch, page],
+    queryFn: () => getFailureCases({ status: status || undefined, search: debouncedSearch || undefined, page, limit: 30 }),
     placeholderData: (prev) => prev,
   });
 
@@ -600,7 +612,7 @@ export function FailureAnalysisView() {
       <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
         {/* Table toolbar */}
         <div className="flex flex-col sm:flex-row gap-2 px-4 py-3 border-b border-gray-100">
-          <input value={search} onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+          <input value={search} onChange={(e) => setSearch(e.target.value)}
             placeholder="Search enterprise, connector, ref doc, notes…"
             className="flex-1 text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-300" />
           <select value={status} onChange={(e) => { setStatus(e.target.value); setPage(1); }}
