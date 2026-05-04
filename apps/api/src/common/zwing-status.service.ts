@@ -97,6 +97,38 @@ export class ZwingStatusService {
       jobMatch.connectorId = { $in: connectorIds.map((id) => new Types.ObjectId(id)) };
     }
 
+    // A job that exceeded maxRetry can get stuck in 'processing' state if the
+    // process crashed before writing the final 'failed' transition.  We detect
+    // these "zombie" jobs by checking the timestamps array for any 'failed'
+    // entry in addition to the top-level status field.
+    const hasFailedExpr = {
+      $max: {
+        $cond: [
+          {
+            $or: [
+              { $eq: ['$status', 'failed'] },
+              {
+                $gt: [
+                  {
+                    $size: {
+                      $filter: {
+                        input: { $ifNull: ['$timestamps', []] },
+                        as: 't',
+                        cond: { $eq: ['$$t.status', 'failed'] },
+                      },
+                    },
+                  },
+                  0,
+                ],
+              },
+            ],
+          },
+          1,
+          0,
+        ],
+      },
+    };
+
     const jobGroups = await this.jobModel.aggregate([
       { $match: jobMatch },
       { $sort: { transactionDate: -1 } },
@@ -104,7 +136,7 @@ export class ZwingStatusService {
         $group: {
           _id:            { refDocNo: '$refDocNo', connectorId: '$connectorId' },
           hasSuccess:     { $max: { $cond: [{ $eq: ['$status', 'success'] }, 1, 0] } },
-          hasFailed:      { $max: { $cond: [{ $eq: ['$status', 'failed'] }, 1, 0] } },
+          hasFailed:      hasFailedExpr,
           hasPending:     { $max: { $cond: [{ $in: ['$status', ['pending', 'processing']] }, 1, 0] } },
           latestError:    { $first: '$error' },
           latestDate:     { $first: '$transactionDate' },

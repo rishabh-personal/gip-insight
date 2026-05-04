@@ -50,6 +50,23 @@ export class EnterprisesController {
     return { data: result };
   }
 
+  @Get(':ssoEnterpriseId/event-recon')
+  @ApiOperation({
+    summary:
+      'Per-outbound-event reconciliation summary — GIP job counts vs Zwing source counts across all connectors',
+  })
+  async eventRecon(
+    @Param('ssoEnterpriseId') ssoEnterpriseId: string,
+    @Query() pagination: PaginationDto,
+  ): Promise<any> {
+    const result = await this.svc.getEventReconSummary(
+      ssoEnterpriseId,
+      pagination.fromDate,
+      pagination.toDate,
+    );
+    return { data: result };
+  }
+
   @Get(':ssoEnterpriseId')
   @ApiOperation({ summary: 'Enterprise detail with connectors and app health (STORY-002)' })
   async detail(

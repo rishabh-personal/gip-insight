@@ -73,47 +73,73 @@ export class TraceService {
       }
     }
 
-    // Step 3: Enrich jobs with connector/app/event and tasks
-    const enrichedJobs = await Promise.all(
-      jobs.map(async (job) => {
-        const [tasks, connector] = await Promise.all([
-          this.taskModel.find({ jobId: job._id }).sort({ createdAt: 1 }).lean(),
-          this.connectorModel.findById(job.connectorId).lean(),
-        ]);
+    // Step 3: Enrich jobs with connector/app/event and tasks (batched to avoid N+1)
+    const connectorIds = [...new Set(jobs.map((j) => j.connectorId?.toString()))].filter(Boolean);
+    const cemIds = [...new Set(jobs.map((j) => j.connectorAppEventId?.toString()))].filter(Boolean);
 
-        const appIds = [connector?.outboundAppId?.toString(), connector?.inboundAppId?.toString()].filter(Boolean);
-        const apps = await this.appModel.find({
-          _id: { $in: appIds.map((id) => new Types.ObjectId(id)) },
-        }).lean();
-        const appMap: Record<string, any> = {};
-        for (const a of apps) appMap[a._id.toString()] = a;
+    const [allTasks, connectors, cems] = await Promise.all([
+      this.taskModel.find({ jobId: { $in: jobs.map((j) => j._id) } }).sort({ createdAt: 1 }).lean(),
+      connectorIds.length
+        ? this.connectorModel.find({ _id: { $in: connectorIds.map((id) => new Types.ObjectId(id)) } }).lean()
+        : Promise.resolve([]),
+      cemIds.length
+        ? this.cemModel.find({ _id: { $in: cemIds.map((id) => new Types.ObjectId(id)) } }).lean()
+        : Promise.resolve([]),
+    ]);
 
-        let event = null;
-        if (job.connectorAppEventId) {
-          const cem = await this.cemModel.findById(job.connectorAppEventId).lean();
-          if (cem?.outboundEventId) {
-            event = await this.eventModel.findById(cem.outboundEventId).lean();
-          }
-        }
+    const connectorMap: Record<string, any> = {};
+    for (const c of connectors) connectorMap[c._id.toString()] = c;
+    const cemMap: Record<string, any> = {};
+    for (const m of cems) cemMap[m._id.toString()] = m;
 
-        const taskSummary = {
-          total: tasks.length,
-          success: tasks.filter((t) => t.status === 'success').length,
-          failed: tasks.filter((t) => t.status === 'failed').length,
-          pending: tasks.filter((t) => t.status === 'pending').length,
-        };
+    const appIds = [...new Set([
+      ...connectors.map((c) => c.outboundAppId?.toString()),
+      ...connectors.map((c) => c.inboundAppId?.toString()),
+    ])].filter(Boolean);
+    const eventIds = [...new Set(cems.map((m) => m.outboundEventId?.toString()))].filter(Boolean);
 
-        return {
-          ...job,
-          connector,
-          outboundApp: connector ? appMap[connector.outboundAppId?.toString()] : null,
-          inboundApp: connector ? appMap[connector.inboundAppId?.toString()] : null,
-          event,
-          tasks,
-          taskSummary,
-        };
-      }),
-    );
+    const [apps, events] = await Promise.all([
+      appIds.length
+        ? this.appModel.find({ _id: { $in: appIds.map((id) => new Types.ObjectId(id)) } }).lean()
+        : Promise.resolve([]),
+      eventIds.length
+        ? this.eventModel.find({ _id: { $in: eventIds.map((id) => new Types.ObjectId(id)) } }).lean()
+        : Promise.resolve([]),
+    ]);
+
+    const appMap: Record<string, any> = {};
+    for (const a of apps) appMap[a._id.toString()] = a;
+    const eventMap: Record<string, any> = {};
+    for (const ev of events) eventMap[ev._id.toString()] = ev;
+
+    const tasksByJob: Record<string, any[]> = {};
+    for (const t of allTasks) {
+      const jid = t.jobId.toString();
+      if (!tasksByJob[jid]) tasksByJob[jid] = [];
+      tasksByJob[jid].push(t);
+    }
+
+    const enrichedJobs = jobs.map((job) => {
+      const connector = connectorMap[job.connectorId?.toString()];
+      const cem = cemMap[job.connectorAppEventId?.toString()];
+      const event = cem ? eventMap[cem.outboundEventId?.toString()] ?? null : null;
+      const tasks = tasksByJob[job._id.toString()] ?? [];
+      const taskSummary = {
+        total: tasks.length,
+        success: tasks.filter((t) => t.status === 'success').length,
+        failed: tasks.filter((t) => t.status === 'failed').length,
+        pending: tasks.filter((t) => t.status === 'pending').length,
+      };
+      return {
+        ...job,
+        connector,
+        outboundApp: connector ? appMap[connector.outboundAppId?.toString()] ?? null : null,
+        inboundApp: connector ? appMap[connector.inboundAppId?.toString()] ?? null : null,
+        event,
+        tasks,
+        taskSummary,
+      };
+    });
 
     // Determine overall pipeline status
     let pipelineStatus: 'SYNCED' | 'PARTIAL' | 'NOT_SYNCED' | 'PENDING';

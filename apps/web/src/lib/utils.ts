@@ -32,16 +32,3 @@ export function toIso(d: Date): string {
   return d.toISOString();
 }
 
-export function statusColor(status: string): string {
-  const map: Record<string, string> = {
-    success:    'text-green-700 bg-green-50',
-    failed:     'text-red-700 bg-red-50',
-    pending:    'text-yellow-700 bg-yellow-50',
-    processing: 'text-blue-700 bg-blue-50',
-    SYNCED:     'text-green-700 bg-green-50',
-    PARTIAL:    'text-yellow-700 bg-yellow-50',
-    NOT_SYNCED: 'text-red-700 bg-red-50',
-    PENDING:    'text-blue-700 bg-blue-50',
-  };
-  return map[status] || 'text-gray-600 bg-gray-50';
-}

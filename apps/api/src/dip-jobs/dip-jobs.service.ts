@@ -1,4 +1,4 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { DipJob } from '../schemas/dip-job.schema';
@@ -8,11 +8,10 @@ import { ConnectorEventMapping } from '../schemas/connector-event-mapping.schema
 import { AppCatalog } from '../schemas/app-catalog.schema';
 import { EventCatalog } from '../schemas/event-catalog.schema';
 import { Enterprise } from '../schemas/enterprise.schema';
-import { ZwingStatusService, errMsg } from '../common/zwing-status.service';
+import { ZwingStatusService } from '../common/zwing-status.service';
 
 @Injectable()
 export class DipJobsService {
-  private readonly logger = new Logger(DipJobsService.name);
 
   constructor(
     @InjectModel(DipJob.name) private readonly jobModel: Model<DipJob>,

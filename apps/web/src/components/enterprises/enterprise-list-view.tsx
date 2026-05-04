@@ -12,6 +12,15 @@ import { Building2, Layers, Search, Star, FlaskConical, AlertTriangle, Pin, X, P
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { cn } from '@/lib/utils';
 
+function useDebounce<T>(value: T, delay = 350): T {
+  const [debounced, setDebounced] = useState<T>(value);
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(value), delay);
+    return () => clearTimeout(t);
+  }, [value, delay]);
+  return debounced;
+}
+
 type SubTab = 'all' | 'attention' | 'important' | 'test';
 
 const CONNECTOR_NAME_KEY = 'gip:active-connector-name';
@@ -27,6 +36,7 @@ function saveStr(key: string, value: string) {
 
 export function EnterpriseListView() {
   const [search, setSearch] = useState('');
+  const debouncedSearch = useDebounce(search, 350);
   // Store connector name directly — not a view ID. Empty string = "All".
   const [activeConnectorName, setActiveConnectorNameRaw] = useState<string>(
     () => loadStr(CONNECTOR_NAME_KEY, ''),
@@ -74,9 +84,9 @@ export function EnterpriseListView() {
   }, [importantIds]);
 
   const { data, isLoading, isError, error } = useQuery({
-    queryKey: ['enterprise-stubs', search, activeConnectorName],
+    queryKey: ['enterprise-stubs', debouncedSearch, activeConnectorName],
     queryFn: () => getEnterprises({
-      search: search || undefined,
+      search: debouncedSearch || undefined,
       connectorName: activeConnectorName || undefined,
     }),
     staleTime: 30_000,
