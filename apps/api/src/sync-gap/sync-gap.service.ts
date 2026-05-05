@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { DipJob } from '../schemas/dip-job.schema';
 import { Enterprise } from '../schemas/enterprise.schema';
 import { MysqlTenantService } from '../database/mysql-tenant.service';
@@ -141,7 +141,14 @@ export class SyncGapService {
   /**
    * Returns source records that GIP has captured but whose jobs are still
    * in pending/processing state (no success, no failure yet).
-   * These can be re-triggered the same way as missed events.
+   *
+   * Two-pass approach:
+   *   Pass 1 (MySQL-first) — start from Zwing invoices created in the date
+   *     window and cross-reference GIP jobs. Catches the typical case.
+   *   Pass 2 (GIP-first) — query GIP directly for any pending/processing jobs
+   *     whose transactionDate falls in the window but whose Zwing created_at
+   *     may be outside it (retriggered / delayed events). These are enriched
+   *     with a secondary MySQL lookup and merged in.
    */
   async getPendingInvoices(
     ssoEnterpriseId: string,
@@ -169,6 +176,9 @@ export class SyncGapService {
       };
     }
 
+    const refDocField = sourceConfig.refDocField;
+
+    // ── Pass 1: MySQL-first ────────────────────────────────────────────────
     const { sql, params } = this.buildSourceQuery(sourceConfig, from, to);
 
     const [sourceRows, statusResult] = await Promise.all([
@@ -182,23 +192,13 @@ export class SyncGapService {
     ]);
 
     const { byInvoice, byPair } = statusResult;
-    const refDocField = sourceConfig.refDocField;
 
+    // hasPendingOnly: jobs exist, no success, and no failure ever — purely in-flight.
     const pendingIds = new Set(
       [...byInvoice.entries()]
         .filter(([, v]) => v.hasPendingOnly)
         .map(([id]) => id),
     );
-
-    if (!pendingIds.size) {
-      return {
-        data: {
-          enterprise: { ssoEnterpriseId, tradeName: enterprise.tradeName, dbName },
-          count: 0,
-          pendingInvoices: [],
-        },
-      };
-    }
 
     const jobInfoMap = new Map<string, { latestDate: Date; latestJobId: unknown }>();
     for (const p of byPair) {
@@ -209,13 +209,88 @@ export class SyncGapService {
       }
     }
 
-    const pendingInvoices = (sourceRows as any[])
+    const pendingInvoices: any[] = (sourceRows as any[])
       .filter((r) => pendingIds.has(String(r[refDocField])))
       .map((r) => ({
         ...r,
         gipLastAttempt: jobInfoMap.get(String(r[refDocField]))?.latestDate ?? null,
         gipJobId:       jobInfoMap.get(String(r[refDocField]))?.latestJobId?.toString() ?? null,
       }));
+
+    // ── Pass 2: GIP-first supplemental ────────────────────────────────────
+    // Find pending/processing GIP jobs by transactionDate. This catches jobs
+    // whose Zwing created_at is outside the MySQL window (e.g. retriggered
+    // events) that Pass 1 would miss entirely.
+    const gipDirectJobs = await this.jobModel
+      .find({
+        ssoEnterpriseId,
+        status: { $in: ['pending', 'processing'] },
+        transactionDate: { $gte: from, $lte: to },
+      })
+      .select('refDocNo status updatedAt')
+      .lean()
+      .catch(() => [] as any[]);
+
+    const alreadyCovered = new Set(pendingInvoices.map((r) => String(r[refDocField])));
+    const candidateIds = [
+      ...new Set(
+        (gipDirectJobs as any[])
+          .map((j) => j.refDocNo)
+          .filter((id) => id && !alreadyCovered.has(id)),
+      ),
+    ] as string[];
+
+    if (candidateIds.length) {
+      // ── Success guard ────────────────────────────────────────────────────
+      // Exclude any refDocNo that already has a success job in GIP (any date).
+      // Without this, invoices delivered via a later retrigger would still
+      // appear here because an older pending attempt falls in the date window.
+      const successDocs = await this.jobModel
+        .find({ ssoEnterpriseId, refDocNo: { $in: candidateIds }, status: 'success' })
+        .select('refDocNo')
+        .lean()
+        .catch(() => []);
+      const deliveredIds = new Set((successDocs as any[]).map((j) => j.refDocNo));
+      const extraIds = candidateIds.filter((id) => !deliveredIds.has(id));
+
+      if (extraIds.length) {
+        // Bulk MySQL lookup to enrich extra invoices with source fields.
+        const placeholders = extraIds.map(() => '?').join(',');
+        const columns = sourceConfig.selectFields?.length ? sourceConfig.selectFields.join(', ') : '*';
+        const extraRows: any[] = await this.mysql
+          .query(
+            dbName,
+            `SELECT ${columns} FROM ${sourceConfig.tableName} WHERE ${sourceConfig.refDocField} IN (${placeholders})`,
+            extraIds,
+          )
+          .catch(() => []);
+
+        const mysqlMap = new Map<string, any>(
+          (extraRows as any[]).map((r) => [String(r[refDocField]), r]),
+        );
+
+        // Latest job info per refDocNo from GIP-direct results.
+        const extraJobMap = new Map<string, { latestDate: Date | null; latestJobId: string | null }>();
+        for (const job of gipDirectJobs as any[]) {
+          if (!extraIds.includes(job.refDocNo)) continue;
+          const existing = extraJobMap.get(job.refDocNo);
+          const jobDate: Date | null = (job as any).updatedAt ?? null;
+          if (!existing || (jobDate && existing.latestDate && jobDate > existing.latestDate)) {
+            extraJobMap.set(job.refDocNo, { latestDate: jobDate, latestJobId: (job as any)._id?.toString() ?? null });
+          }
+        }
+
+        for (const refDocNo of extraIds) {
+          const mysqlRow = mysqlMap.get(refDocNo) ?? { [refDocField]: refDocNo };
+          const info = extraJobMap.get(refDocNo);
+          pendingInvoices.push({
+            ...mysqlRow,
+            gipLastAttempt: info?.latestDate ?? null,
+            gipJobId:       info?.latestJobId ?? null,
+          });
+        }
+      }
+    }
 
     return {
       data: {
@@ -302,21 +377,47 @@ export class SyncGapService {
     const gipJobs = sourceIds.length
       ? await this.jobModel
           .find({ ssoEnterpriseId, refDocNo: { $in: sourceIds } })
-          .select('refDocNo status')
+          .select('refDocNo status error updatedAt')
           .lean()
       : [];
 
-    // Group GIP jobs by refDocNo: track whether any job ever succeeded or failed.
-    type GipStatus = { hasSuccess: boolean; hasFailed: boolean };
-    const gipMap = new Map<string, GipStatus>();
+    // Group GIP jobs by refDocNo: track whether any job ever succeeded, failed,
+    // or is still processing. Keep the latest job ID + error for UI deep-linking.
+    type GipEntry = {
+      hasSuccess: boolean;
+      hasFailed: boolean;
+      hasProcessing: boolean;
+      latestJobId: string | null;
+      latestJobError: string | null;
+      latestUpdatedAt: Date | null;
+    };
+    const gipMap = new Map<string, GipEntry>();
     for (const job of gipJobs) {
-      const cur = gipMap.get(job.refDocNo) ?? { hasSuccess: false, hasFailed: false };
-      if (job.status === 'success') cur.hasSuccess = true;
-      if (job.status === 'failed')  cur.hasFailed  = true;
+      const cur = gipMap.get(job.refDocNo) ?? {
+        hasSuccess: false,
+        hasFailed: false,
+        hasProcessing: false,
+        latestJobId: null,
+        latestJobError: null,
+        latestUpdatedAt: null,
+      };
+      if (job.status === 'success')                              cur.hasSuccess    = true;
+      if (job.status === 'failed')                               cur.hasFailed     = true;
+      if (job.status === 'processing' || job.status === 'pending') cur.hasProcessing = true;
+
+      // Keep the most-recently-updated job as the "latest" for deep-linking.
+      const jobUpdatedAt: Date | null = (job as any).updatedAt ?? null;
+      if (!cur.latestUpdatedAt || (jobUpdatedAt && jobUpdatedAt > cur.latestUpdatedAt)) {
+        cur.latestUpdatedAt = jobUpdatedAt;
+        cur.latestJobId     = (job as any)._id?.toString() ?? null;
+        cur.latestJobError  = (job as any).error ?? null;
+      }
       gipMap.set(job.refDocNo, cur);
     }
 
     // Classify each source row into missing / failed / success.
+    // "failed" bucket includes both truly-failed AND stuck-processing invoices so
+    // operators can retrigger all unhealthy records from a single tab.
     const missing: any[] = [];
     const failed:  any[] = [];
 
@@ -328,13 +429,117 @@ export class SyncGapService {
         // No GIP job at all — Debezium never emitted / consumed the event.
         missing.push(row);
       } else if (!gip.hasSuccess) {
-        // GIP received the event but every job attempt failed.
-        failed.push(row);
+        // GIP received the event but has no successful delivery yet.
+        // Includes: all-failed jobs AND stuck-processing jobs.
+        const gipStatus = gip.hasFailed ? 'failed' : 'processing';
+        failed.push({
+          ...row,
+          gipStatus,
+          gipJobId:    gip.latestJobId,
+          gipJobError: gip.latestJobError,
+        });
       }
       // else: at least one success → captured, skip.
     }
 
-    const successCount = sourceRows.length - missing.length - failed.length;
+    // ── Supplemental GIP-first pass for failed tab ───────────────────────────
+    // Catch zombie processing jobs (status='processing' with failed timestamps)
+    // whose Zwing created_at is outside the MySQL window but whose GIP
+    // transactionDate falls within it — these are invisible to the MySQL-first
+    // pass above but show up in the connector-logs "Failed" tab.
+    let extraFailedCount = 0; // items added from the GIP-first pass (not in sourceRows)
+    const classifiedIds = new Set([
+      ...missing.map((r) => String(r[refDocField])),
+      ...failed.map((r)  => String(r[refDocField])),
+      ...sourceRows.filter((r) => {
+        const g = gipMap.get(String(r[refDocField]));
+        return g?.hasSuccess;
+      }).map((r) => String(r[refDocField])),
+    ]);
+
+    const gipExtraJobs = await this.jobModel
+      .find({
+        ssoEnterpriseId,
+        status: { $in: ['failed', 'processing', 'pending'] },
+        transactionDate: { $gte: from, $lte: to },
+      })
+      .select('refDocNo status error updatedAt')
+      .lean()
+      .catch(() => [] as any[]);
+
+    const extraCandidateIds = [
+      ...new Set(
+        (gipExtraJobs as any[])
+          .map((j) => j.refDocNo)
+          .filter((id) => id && !classifiedIds.has(id)),
+      ),
+    ] as string[];
+
+    if (extraCandidateIds.length) {
+      // ── Success guard ────────────────────────────────────────────────────
+      // The gipExtraJobs query never fetches success jobs, so hasSuccess would
+      // always be false. Explicitly check: if a refDocNo has ANY success job
+      // in GIP it was delivered — exclude it from the failed bucket.
+      const extraSuccessDocs = await this.jobModel
+        .find({ ssoEnterpriseId, refDocNo: { $in: extraCandidateIds }, status: 'success' })
+        .select('refDocNo')
+        .lean()
+        .catch(() => []);
+      const extraDeliveredIds = new Set((extraSuccessDocs as any[]).map((j) => j.refDocNo));
+      const extraFailedIds = extraCandidateIds.filter((id) => !extraDeliveredIds.has(id));
+      extraFailedCount = extraFailedIds.length;
+
+      if (extraFailedIds.length) {
+        // Enrich with MySQL data where possible.
+        const placeholders = extraFailedIds.map(() => '?').join(',');
+        const columns = sourceConfig.selectFields?.length ? sourceConfig.selectFields.join(', ') : '*';
+        const extraRows: any[] = await this.mysql
+          .query(
+            dbName,
+            `SELECT ${columns} FROM ${sourceConfig.tableName} WHERE ${sourceConfig.refDocField} IN (${placeholders})`,
+            extraFailedIds,
+          )
+          .catch(() => []);
+
+        const mysqlMap = new Map<string, any>(
+          (extraRows as any[]).map((r) => [String(r[refDocField]), r]),
+        );
+
+        // Build latest job info map for confirmed extra IDs.
+        const extraJobMap = new Map<string, GipEntry>();
+        for (const job of gipExtraJobs as any[]) {
+          if (!extraFailedIds.includes(job.refDocNo)) continue;
+          const cur = extraJobMap.get(job.refDocNo) ?? {
+            hasSuccess: false, hasFailed: false, hasProcessing: false,
+            latestJobId: null, latestJobError: null, latestUpdatedAt: null,
+          };
+          if (job.status === 'failed')                                 cur.hasFailed     = true;
+          if (job.status === 'processing' || job.status === 'pending') cur.hasProcessing = true;
+          const jobUpdatedAt: Date | null = job.updatedAt ?? null;
+          if (!cur.latestUpdatedAt || (jobUpdatedAt && jobUpdatedAt > cur.latestUpdatedAt)) {
+            cur.latestUpdatedAt = jobUpdatedAt;
+            cur.latestJobId     = job._id?.toString() ?? null;
+            cur.latestJobError  = job.error ?? null;
+          }
+          extraJobMap.set(job.refDocNo, cur);
+        }
+
+        for (const refDocNo of extraFailedIds) {
+          const gip = extraJobMap.get(refDocNo);
+          if (!gip) continue;
+          const mysqlRow = mysqlMap.get(refDocNo) ?? { [refDocField]: refDocNo };
+          const gipStatus = gip.hasFailed ? 'failed' : 'processing';
+          failed.push({
+            ...mysqlRow,
+            gipStatus,
+            gipJobId:    gip.latestJobId,
+            gipJobError: gip.latestJobError,
+          });
+        }
+      }
+    }
+
+    const successCount = sourceRows.length - missing.length - (failed.length - extraFailedCount);
     // gap = total docs not successfully delivered (missing + failed)
     const gap = missing.length + failed.length;
 
@@ -378,8 +583,7 @@ export class SyncGapService {
    *   - GIP timestamps are always UTC.
    *   - delay = first GIP success timestamp − Zwing created_at (both UTC).
    *
-   * Returns all matching rows (capped at MAX_TIMELINE_ROWS). The frontend
-   * handles client-side pagination and sorting.
+   * Returns all matching rows. The frontend handles client-side pagination and sorting.
    */
   async getInvoiceTimeline(
     ssoEnterpriseId: string,
@@ -389,10 +593,9 @@ export class SyncGapService {
       eventCode?: string;
       transactionType?: string;
       storeId?: string;
+      connectorId?: string;
     } = {},
   ) {
-    const MAX_ROWS = 5000;
-
     const eventCode   = opts.eventCode ?? DEFAULT_INVOICE_EVENT_CODE;
     const sourceConfig = EVENT_SOURCE_CONFIGS[eventCode];
     if (!sourceConfig) {
@@ -421,7 +624,6 @@ export class SyncGapService {
     const { sql, params } = this.buildSourceQuery(sourceConfig, from, to, {
       ...extra,
       orderBy: `${sourceConfig.dateField} DESC`,
-      limit: MAX_ROWS,
     });
 
     const sourceRows = await this.mysql
@@ -447,11 +649,18 @@ export class SyncGapService {
     const refDocField = sourceConfig.refDocField;
     const allIds = sourceRows.map((r) => String(r[refDocField]));
 
-    // ── 2. Fetch all GIP jobs for these IDs ─────────────────────────────────
+    // ── 2. Fetch GIP jobs for these IDs ─────────────────────────────────────
     // timestamps array holds per-attempt status + timestamp entries.
     // We need the earliest 'success' entry to compute the real sync time.
+    // When connectorId is supplied, restrict to that connector so that status
+    // and delay reflect only this connector's delivery pipeline.
+    const gipJobFilter: Record<string, any> = { ssoEnterpriseId, refDocNo: { $in: allIds } };
+    if (opts.connectorId) {
+      gipJobFilter.connectorId = new Types.ObjectId(opts.connectorId);
+    }
+
     const gipJobs = await this.jobModel
-      .find({ ssoEnterpriseId, refDocNo: { $in: allIds } })
+      .find(gipJobFilter)
       .select('refDocNo status timestamps updatedAt')
       .lean();
 
@@ -461,7 +670,8 @@ export class SyncGapService {
       hasFailed: boolean;
       hasPending: boolean;
       firstSuccessAt: Date | null;
-      latestJobId: string | null;
+      successJobId: string | null;  // ID of the job that first succeeded (for trace deep-link)
+      latestJobId: string | null;   // fallback: ID of the most-recently-iterated job
     };
 
     const gipMap = new Map<string, GipInfo>();
@@ -472,25 +682,34 @@ export class SyncGapService {
         hasFailed: false,
         hasPending: false,
         firstSuccessAt: null,
+        successJobId: null,
         latestJobId: null,
       };
 
       if (job.status === 'success') {
         cur.hasSuccess = true;
-        // Pick the timestamp where status === 'success' inside the attempts array.
-        // Falls back to job.updatedAt when timestamps are absent.
-        const successTs =
-          ((job.timestamps ?? []) as Array<{ status: string; timestamp: Date }>)
-            .find((t) => t.status === 'success')?.timestamp ?? job.updatedAt;
+        // Find the EARLIEST 'success' entry in the attempts array.
+        // Only success-job timestamps are considered — failed/processing entries are ignored.
+        // Falls back to job.updatedAt when no 'success' entry exists in the array.
+        const successEntries = ((job.timestamps ?? []) as Array<{ status: string; timestamp: Date }>)
+          .filter((t) => t.status === 'success')
+          .map((t) => new Date(t.timestamp))
+          .filter((d) => !isNaN(d.getTime()));
 
-        if (successTs && (!cur.firstSuccessAt || successTs < cur.firstSuccessAt)) {
+        const successTs: Date =
+          successEntries.length > 0
+            ? successEntries.reduce((earliest, d) => (d < earliest ? d : earliest))
+            : new Date(job.updatedAt);
+
+        if (!cur.firstSuccessAt || successTs < cur.firstSuccessAt) {
           cur.firstSuccessAt = successTs;
+          // Pin the trace deep-link to whichever job provided the earliest success.
+          cur.successJobId = (job as any)._id?.toString() ?? null;
         }
       }
       if (job.status === 'failed')                                   cur.hasFailed  = true;
       if (job.status === 'pending' || job.status === 'processing')   cur.hasPending = true;
 
-      // Keep the latest jobId so the UI can deep-link to the trace page.
       cur.latestJobId = (job as any)._id?.toString() ?? null;
       gipMap.set(job.refDocNo, cur);
     }
@@ -538,7 +757,7 @@ export class SyncGapService {
         gipStatus,
         gipSyncedAt:        gipSyncedAt?.toISOString() ?? null,
         delaySeconds,
-        gipJobId:           gip?.latestJobId ?? null,
+        gipJobId:           gip?.successJobId ?? gip?.latestJobId ?? null,
       };
     });
 

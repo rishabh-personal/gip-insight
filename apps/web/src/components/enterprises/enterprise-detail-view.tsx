@@ -12,7 +12,7 @@ import { StatCard } from '@/components/ui/stat-card';
 import { Badge } from '@/components/ui/badge';
 import {
   ChevronRight, ChevronDown, ChevronUp, AlertCircle, Activity, ArrowLeft, GitBranch, Database,
-  Copy, Check, ExternalLink, CheckCircle2, Clock,
+  Copy, Check, ExternalLink, CheckCircle2, Clock, BarChart2,
 } from 'lucide-react';
 
 export function EnterpriseDetailView({ ssoEnterpriseId }: { ssoEnterpriseId: string }) {
@@ -207,7 +207,7 @@ function ConnectorCard({
               <span className="sm:hidden">Miss</span>
             </button>
           )}
-          {/* Log buttons: All · Success · Failures */}
+          {/* Log buttons: All · Success · Failures · Sync Gap */}
           <div className="flex items-center gap-1">
             <Link
               href={`/enterprises/${ssoEnterpriseId}/logs?connectorId=${c._id}&connectorName=${encodeURIComponent(c.name)}&status=all&from=${from}&to=${to}`}
@@ -237,6 +237,22 @@ function ConnectorCard({
                 <span className="hidden sm:inline">Failures</span>
               </Link>
             )}
+            <Link
+              href={`/enterprises/${ssoEnterpriseId}/sync-gap?connectorId=${c._id}&connectorName=${encodeURIComponent(c.name)}&from=${from}&to=${to}`}
+              className="flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 font-medium px-1.5 py-0.5 rounded hover:bg-indigo-50 transition-colors"
+              title="Sync Gap for this connector"
+            >
+              <BarChart2 className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Sync Gap</span>
+            </Link>
+            <Link
+              href={`/enterprises/${ssoEnterpriseId}/invoice-timeline?connectorId=${c._id}&connectorName=${encodeURIComponent(c.name)}&from=${from}&to=${to}`}
+              className="flex items-center gap-1 text-xs text-purple-600 hover:text-purple-800 font-medium px-1.5 py-0.5 rounded hover:bg-purple-50 transition-colors"
+              title="Invoice Timeline for this connector"
+            >
+              <Clock className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Timeline</span>
+            </Link>
           </div>
         </div>
       </div>
