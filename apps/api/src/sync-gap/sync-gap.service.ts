@@ -378,8 +378,7 @@ export class SyncGapService {
    *   - GIP timestamps are always UTC.
    *   - delay = first GIP success timestamp − Zwing created_at (both UTC).
    *
-   * Returns all matching rows (capped at MAX_TIMELINE_ROWS). The frontend
-   * handles client-side pagination and sorting.
+   * Returns all matching rows. The frontend handles client-side pagination and sorting.
    */
   async getInvoiceTimeline(
     ssoEnterpriseId: string,
@@ -391,8 +390,6 @@ export class SyncGapService {
       storeId?: string;
     } = {},
   ) {
-    const MAX_ROWS = 5000;
-
     const eventCode   = opts.eventCode ?? DEFAULT_INVOICE_EVENT_CODE;
     const sourceConfig = EVENT_SOURCE_CONFIGS[eventCode];
     if (!sourceConfig) {
@@ -421,7 +418,6 @@ export class SyncGapService {
     const { sql, params } = this.buildSourceQuery(sourceConfig, from, to, {
       ...extra,
       orderBy: `${sourceConfig.dateField} DESC`,
-      limit: MAX_ROWS,
     });
 
     const sourceRows = await this.mysql

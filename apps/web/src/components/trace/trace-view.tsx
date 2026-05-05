@@ -1,15 +1,15 @@
 'use client';
 
-import { useState } from 'react';
-import { useMutation } from '@tanstack/react-query';
+import { useState, useRef, useEffect, useMemo } from 'react';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import { useSearchParams, useRouter } from 'next/navigation';
-import { traceInvoice } from '@/lib/api-client';
+import { traceInvoice, getEnterprises } from '@/lib/api-client';
 import { formatDate, cn } from '@/lib/utils';
 import { PageLoader, EmptyState } from '@/components/ui/loading';
 import { Badge } from '@/components/ui/badge';
 import {
   Search, CheckCircle2, XCircle, AlertTriangle, Clock,
-  Database, Zap, Package,
+  Database, Zap, Package, ChevronDown, X,
 } from 'lucide-react';
 
 const pipelineColors = {
@@ -28,9 +28,76 @@ const pipelineIcons = {
 
 export function TraceView() {
   const searchParams = useSearchParams();
-  const [invoiceId, setInvoiceId] = useState(searchParams.get('invoiceId') || '');
-  const [enterpriseId, setEnterpriseId] = useState(searchParams.get('ssoEnterpriseId') || '');
   const router = useRouter();
+
+  const [invoiceId, setInvoiceId] = useState(searchParams.get('invoiceId') || '');
+  // Selected enterprise SSO ID (used for the API call)
+  const [enterpriseId, setEnterpriseId] = useState(searchParams.get('ssoEnterpriseId') || '');
+  // Display name of the selected enterprise (shown in the combobox input)
+  const [enterpriseName, setEnterpriseName] = useState('');
+  // Text typed into the combobox search input
+  const [search, setSearch] = useState('');
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const comboboxRef = useRef<HTMLDivElement>(null);
+
+  // Fetch all enterprises (no metrics — fast stub list)
+  const { data: enterprisesData } = useQuery({
+    queryKey: ['enterprises-list'],
+    queryFn: () => getEnterprises(),
+    staleTime: 5 * 60_000,
+  });
+  const allEnterprises: any[] = useMemo(
+    () => enterprisesData?.data ?? [],
+    [enterprisesData],
+  );
+
+  // If the page was opened with a ?ssoEnterpriseId param, pre-fill the name
+  useEffect(() => {
+    const paramId = searchParams.get('ssoEnterpriseId');
+    if (paramId && allEnterprises.length > 0 && !enterpriseName) {
+      const match = allEnterprises.find((e) => e.ssoEnterpriseId === paramId);
+      if (match) setEnterpriseName(match.tradeName || match.legalName || paramId);
+    }
+  }, [allEnterprises, searchParams, enterpriseName]);
+
+  // Filter enterprises by what the user typed
+  const filtered = useMemo(() => {
+    const q = search.toLowerCase();
+    if (!q) return allEnterprises.slice(0, 50);
+    return allEnterprises
+      .filter(
+        (e) =>
+          e.tradeName?.toLowerCase().includes(q) ||
+          e.legalName?.toLowerCase().includes(q) ||
+          e.ssoEnterpriseId?.toLowerCase().includes(q) ||
+          e.baCode?.toLowerCase().includes(q),
+      )
+      .slice(0, 50);
+  }, [allEnterprises, search]);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    function handler(e: MouseEvent) {
+      if (comboboxRef.current && !comboboxRef.current.contains(e.target as Node)) {
+        setDropdownOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  function selectEnterprise(e: any) {
+    setEnterpriseId(e.ssoEnterpriseId);
+    setEnterpriseName(e.tradeName || e.legalName || e.ssoEnterpriseId);
+    setSearch('');
+    setDropdownOpen(false);
+  }
+
+  function clearEnterprise() {
+    setEnterpriseId('');
+    setEnterpriseName('');
+    setSearch('');
+  }
 
   const traceMutation = useMutation({
     mutationFn: () => traceInvoice(invoiceId.trim(), enterpriseId.trim() || undefined),
@@ -55,8 +122,10 @@ export function TraceView() {
 
       {/* Search */}
       <div className="bg-white rounded-xl border border-gray-200 p-5">
-        <div className="flex gap-3">
-          <div className="flex-1">
+        <div className="flex gap-3 flex-wrap sm:flex-nowrap">
+
+          {/* Invoice ID */}
+          <div className="flex-1 min-w-0">
             <label className="block text-xs font-medium text-gray-500 mb-1.5">Invoice ID</label>
             <input
               type="text"
@@ -67,28 +136,111 @@ export function TraceView() {
               className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-300 font-mono"
             />
           </div>
-          <div className="w-64">
+
+          {/* Enterprise combobox */}
+          <div className="w-full sm:w-72" ref={comboboxRef}>
             <label className="block text-xs font-medium text-gray-500 mb-1.5">
-              Enterprise ID <span className="text-gray-400 font-normal">(optional)</span>
+              Enterprise <span className="text-gray-400 font-normal">(optional)</span>
             </label>
-            <input
-              type="text"
-              value={enterpriseId}
-              onChange={(e) => setEnterpriseId(e.target.value)}
-              placeholder="ssoEnterpriseId…"
-              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-300 font-mono"
-            />
+            <div className="relative">
+              {/* Trigger button */}
+              <button
+                type="button"
+                onClick={() => {
+                  setDropdownOpen((o) => !o);
+                  setSearch('');
+                }}
+                className={cn(
+                  'w-full flex items-center justify-between gap-2 px-3 py-2 text-sm border rounded-lg transition-colors text-left',
+                  dropdownOpen
+                    ? 'border-indigo-400 ring-2 ring-indigo-200'
+                    : 'border-gray-200 hover:border-gray-300',
+                  enterpriseId ? 'text-gray-900' : 'text-gray-400',
+                )}
+              >
+                <span className="truncate">
+                  {enterpriseName || 'Select enterprise…'}
+                </span>
+                <span className="flex items-center gap-1 shrink-0">
+                  {enterpriseId && (
+                    <span
+                      role="button"
+                      onClick={(e) => { e.stopPropagation(); clearEnterprise(); }}
+                      className="p-0.5 rounded hover:bg-gray-100 text-gray-400 hover:text-gray-600 cursor-pointer"
+                    >
+                      <X className="w-3 h-3" />
+                    </span>
+                  )}
+                  <ChevronDown className={cn('w-4 h-4 text-gray-400 transition-transform', dropdownOpen && 'rotate-180')} />
+                </span>
+              </button>
+
+              {/* Dropdown */}
+              {dropdownOpen && (
+                <div className="absolute z-50 mt-1 w-full bg-white border border-gray-200 rounded-xl shadow-lg overflow-hidden">
+                  {/* Search box */}
+                  <div className="p-2 border-b border-gray-100">
+                    <div className="relative">
+                      <Search className="absolute left-2.5 top-2 w-3.5 h-3.5 text-gray-400" />
+                      <input
+                        autoFocus
+                        type="text"
+                        placeholder="Search by name or ID…"
+                        value={search}
+                        onChange={(e) => setSearch(e.target.value)}
+                        className="w-full pl-8 pr-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-300"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Options list */}
+                  <ul className="max-h-56 overflow-y-auto divide-y divide-gray-50">
+                    {filtered.length === 0 && (
+                      <li className="px-3 py-4 text-sm text-gray-400 text-center">No enterprises found</li>
+                    )}
+                    {filtered.map((e) => (
+                      <li
+                        key={e.ssoEnterpriseId}
+                        onClick={() => selectEnterprise(e)}
+                        className={cn(
+                          'flex items-start justify-between gap-2 px-3 py-2.5 cursor-pointer hover:bg-indigo-50 transition-colors',
+                          enterpriseId === e.ssoEnterpriseId && 'bg-indigo-50',
+                        )}
+                      >
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-gray-900 truncate">{e.tradeName || e.legalName}</p>
+                          <p className="text-[11px] font-mono text-gray-400 truncate">{e.ssoEnterpriseId}</p>
+                        </div>
+                        {e.baCode && (
+                          <span className="text-[10px] font-medium text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded shrink-0">
+                            {e.baCode}
+                          </span>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+
+            {/* Show selected SSO ID below */}
+            {enterpriseId && (
+              <p className="mt-1 text-[11px] font-mono text-gray-400 truncate">{enterpriseId}</p>
+            )}
           </div>
-          <div className="flex items-end">
+
+          {/* Trace button */}
+          <div className="flex items-end w-full sm:w-auto">
             <button
               onClick={handleSearch}
               disabled={!invoiceId.trim() || traceMutation.isPending}
-              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+              className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 disabled:opacity-50 transition-colors"
             >
               <Search className="w-4 h-4" />
               {traceMutation.isPending ? 'Searching…' : 'Trace'}
             </button>
           </div>
+
         </div>
       </div>
 
