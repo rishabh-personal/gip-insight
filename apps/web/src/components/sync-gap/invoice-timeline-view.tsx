@@ -3,7 +3,7 @@
 import { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { getInvoiceTimeline } from '@/lib/api-client';
 import { useDateRange } from '@/hooks/use-date-range';
 import { cn } from '@/lib/utils';
@@ -125,7 +125,11 @@ const PAGE_SIZE = 50;
 
 export function InvoiceTimelineView({ ssoEnterpriseId }: { ssoEnterpriseId: string }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { from, to } = useDateRange();
+
+  const connectorId   = searchParams.get('connectorId')   ?? undefined;
+  const connectorName = searchParams.get('connectorName') ?? undefined;
 
   // Filters
   const [statusFilter, setStatusFilter] = useState<GipStatus | 'all'>('all');
@@ -138,8 +142,8 @@ export function InvoiceTimelineView({ ssoEnterpriseId }: { ssoEnterpriseId: stri
   const [page, setPage] = useState(1);
 
   const { data, isLoading, isError } = useQuery({
-    queryKey: ['invoice-timeline', ssoEnterpriseId, from, to],
-    queryFn: () => getInvoiceTimeline(ssoEnterpriseId, { from, to }),
+    queryKey: ['invoice-timeline', ssoEnterpriseId, from, to, connectorId],
+    queryFn: () => getInvoiceTimeline(ssoEnterpriseId, { from, to, connectorId }),
     staleTime: 60_000,
   });
 
@@ -200,7 +204,7 @@ export function InvoiceTimelineView({ ssoEnterpriseId }: { ssoEnterpriseId: stri
   return (
     <div className="space-y-5">
       {/* Breadcrumb */}
-      <div className="flex items-center gap-2 text-sm text-gray-500">
+      <div className="flex items-center gap-2 text-sm text-gray-500 flex-wrap">
         <button
           onClick={() => router.back()}
           className="flex items-center gap-1 hover:text-gray-700"
@@ -211,6 +215,11 @@ export function InvoiceTimelineView({ ssoEnterpriseId }: { ssoEnterpriseId: stri
         <span className="text-gray-900 font-medium">
           Invoice Timeline — {enterprise.tradeName ?? ssoEnterpriseId}
         </span>
+        {connectorName && (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-50 text-indigo-700 border border-indigo-200">
+            Connector: {connectorName}
+          </span>
+        )}
       </div>
 
       {/* Summary stats */}

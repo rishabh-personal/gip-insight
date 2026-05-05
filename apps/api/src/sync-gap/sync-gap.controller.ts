@@ -35,17 +35,20 @@ export class SyncGapController {
   @ApiQuery({ name: 'eventCode', required: false, description: `Event code from EVENT_SOURCE_CONFIGS. Defaults to ${DEFAULT_INVOICE_EVENT_CODE}` })
   @ApiQuery({ name: 'transactionType', required: false })
   @ApiQuery({ name: 'storeId', required: false })
+  @ApiQuery({ name: 'connectorId', required: false, description: 'Filter GIP jobs by connector — restricts delay/status to jobs belonging to this connector only' })
   async invoiceTimeline(
     @Param('ssoEnterpriseId') ssoEnterpriseId: string,
     @Query() pagination: PaginationDto,
     @Query('eventCode') eventCode?: string,
     @Query('transactionType') transactionType?: string,
     @Query('storeId') storeId?: string,
+    @Query('connectorId') connectorId?: string,
   ) {
     return this.svc.getInvoiceTimeline(ssoEnterpriseId, pagination.fromDate, pagination.toDate, {
       eventCode,
       transactionType,
       storeId,
+      connectorId,
     });
   }
 

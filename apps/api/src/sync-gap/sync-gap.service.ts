@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { DipJob } from '../schemas/dip-job.schema';
 import { Enterprise } from '../schemas/enterprise.schema';
 import { MysqlTenantService } from '../database/mysql-tenant.service';
@@ -447,6 +447,7 @@ export class SyncGapService {
     // whose Zwing created_at is outside the MySQL window but whose GIP
     // transactionDate falls within it — these are invisible to the MySQL-first
     // pass above but show up in the connector-logs "Failed" tab.
+    let extraFailedCount = 0; // items added from the GIP-first pass (not in sourceRows)
     const classifiedIds = new Set([
       ...missing.map((r) => String(r[refDocField])),
       ...failed.map((r)  => String(r[refDocField])),
@@ -486,6 +487,7 @@ export class SyncGapService {
         .catch(() => []);
       const extraDeliveredIds = new Set((extraSuccessDocs as any[]).map((j) => j.refDocNo));
       const extraFailedIds = extraCandidateIds.filter((id) => !extraDeliveredIds.has(id));
+      extraFailedCount = extraFailedIds.length;
 
       if (extraFailedIds.length) {
         // Enrich with MySQL data where possible.
@@ -537,7 +539,7 @@ export class SyncGapService {
       }
     }
 
-    const successCount = sourceRows.length - missing.length - (failed.length - extraFailedIds.length);
+    const successCount = sourceRows.length - missing.length - (failed.length - extraFailedCount);
     // gap = total docs not successfully delivered (missing + failed)
     const gap = missing.length + failed.length;
 
@@ -591,6 +593,7 @@ export class SyncGapService {
       eventCode?: string;
       transactionType?: string;
       storeId?: string;
+      connectorId?: string;
     } = {},
   ) {
     const eventCode   = opts.eventCode ?? DEFAULT_INVOICE_EVENT_CODE;
@@ -646,11 +649,18 @@ export class SyncGapService {
     const refDocField = sourceConfig.refDocField;
     const allIds = sourceRows.map((r) => String(r[refDocField]));
 
-    // ── 2. Fetch all GIP jobs for these IDs ─────────────────────────────────
+    // ── 2. Fetch GIP jobs for these IDs ─────────────────────────────────────
     // timestamps array holds per-attempt status + timestamp entries.
     // We need the earliest 'success' entry to compute the real sync time.
+    // When connectorId is supplied, restrict to that connector so that status
+    // and delay reflect only this connector's delivery pipeline.
+    const gipJobFilter: Record<string, any> = { ssoEnterpriseId, refDocNo: { $in: allIds } };
+    if (opts.connectorId) {
+      gipJobFilter.connectorId = new Types.ObjectId(opts.connectorId);
+    }
+
     const gipJobs = await this.jobModel
-      .find({ ssoEnterpriseId, refDocNo: { $in: allIds } })
+      .find(gipJobFilter)
       .select('refDocNo status timestamps updatedAt')
       .lean();
 
@@ -660,7 +670,8 @@ export class SyncGapService {
       hasFailed: boolean;
       hasPending: boolean;
       firstSuccessAt: Date | null;
-      latestJobId: string | null;
+      successJobId: string | null;  // ID of the job that first succeeded (for trace deep-link)
+      latestJobId: string | null;   // fallback: ID of the most-recently-iterated job
     };
 
     const gipMap = new Map<string, GipInfo>();
@@ -671,25 +682,34 @@ export class SyncGapService {
         hasFailed: false,
         hasPending: false,
         firstSuccessAt: null,
+        successJobId: null,
         latestJobId: null,
       };
 
       if (job.status === 'success') {
         cur.hasSuccess = true;
-        // Pick the timestamp where status === 'success' inside the attempts array.
-        // Falls back to job.updatedAt when timestamps are absent.
-        const successTs =
-          ((job.timestamps ?? []) as Array<{ status: string; timestamp: Date }>)
-            .find((t) => t.status === 'success')?.timestamp ?? job.updatedAt;
+        // Find the EARLIEST 'success' entry in the attempts array.
+        // Only success-job timestamps are considered — failed/processing entries are ignored.
+        // Falls back to job.updatedAt when no 'success' entry exists in the array.
+        const successEntries = ((job.timestamps ?? []) as Array<{ status: string; timestamp: Date }>)
+          .filter((t) => t.status === 'success')
+          .map((t) => new Date(t.timestamp))
+          .filter((d) => !isNaN(d.getTime()));
 
-        if (successTs && (!cur.firstSuccessAt || successTs < cur.firstSuccessAt)) {
+        const successTs: Date =
+          successEntries.length > 0
+            ? successEntries.reduce((earliest, d) => (d < earliest ? d : earliest))
+            : new Date(job.updatedAt);
+
+        if (!cur.firstSuccessAt || successTs < cur.firstSuccessAt) {
           cur.firstSuccessAt = successTs;
+          // Pin the trace deep-link to whichever job provided the earliest success.
+          cur.successJobId = (job as any)._id?.toString() ?? null;
         }
       }
       if (job.status === 'failed')                                   cur.hasFailed  = true;
       if (job.status === 'pending' || job.status === 'processing')   cur.hasPending = true;
 
-      // Keep the latest jobId so the UI can deep-link to the trace page.
       cur.latestJobId = (job as any)._id?.toString() ?? null;
       gipMap.set(job.refDocNo, cur);
     }
@@ -737,7 +757,7 @@ export class SyncGapService {
         gipStatus,
         gipSyncedAt:        gipSyncedAt?.toISOString() ?? null,
         delaySeconds,
-        gipJobId:           gip?.latestJobId ?? null,
+        gipJobId:           gip?.successJobId ?? gip?.latestJobId ?? null,
       };
     });
 
