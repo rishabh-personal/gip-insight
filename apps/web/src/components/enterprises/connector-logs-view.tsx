@@ -10,7 +10,7 @@ import { cn } from '@/lib/utils';
 import { PageLoader, ErrorState, EmptyState } from '@/components/ui/loading';
 import {
   ArrowLeft, ChevronRight, RefreshCw, CheckCircle2,
-  XCircle, Clock, AlertCircle, Activity, ExternalLink, Search, X,
+  XCircle, Clock, AlertCircle, Activity, ExternalLink, Search, X, Download,
 } from 'lucide-react';
 
 // ─── Debounce hook ────────────────────────────────────────────────────────────
@@ -76,6 +76,42 @@ function fmtDate(iso: string) {
     day: '2-digit', month: 'short', year: '2-digit',
     hour: '2-digit', minute: '2-digit', hour12: false,
   });
+}
+
+function escapeCell(val: string | number | null | undefined): string {
+  const s = val == null ? '' : String(val);
+  return s.includes(',') || s.includes('"') || s.includes('\n')
+    ? `"${s.replace(/"/g, '""')}"`
+    : s;
+}
+
+function downloadCsv(rows: Job[], filename: string) {
+  const headers = ['Job ID', 'Ref Doc No', 'Status', 'Failed Attempts', 'Connector', 'Event Name', 'Event Code', 'Error', 'Transaction Date'];
+  const csvRows = [
+    headers.join(','),
+    ...rows.map((r) =>
+      [
+        r._id,
+        r.refDocNo,
+        r.status,
+        r.failedAttempts ?? 0,
+        r.connector?.name,
+        r.event?.name,
+        r.event?.eventCode,
+        r.error,
+        r.transactionDate ? fmtDate(r.transactionDate) : '',
+      ]
+        .map(escapeCell)
+        .join(','),
+    ),
+  ];
+  const blob = new Blob([csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 // ─── Job row (mobile card) ────────────────────────────────────────────────────
@@ -163,6 +199,7 @@ export function ConnectorLogsView({ ssoEnterpriseId }: { ssoEnterpriseId: string
   const [searchInput, setSearchInput] = useState('');
   const search = useDebounce(searchInput, 400);
   const searchRef = useRef<HTMLInputElement>(null);
+  const [exporting, setExporting] = useState(false);
 
   // Reset page when search or status changes
   useEffect(() => { setPage(1); }, [search, status]);
@@ -185,6 +222,37 @@ export function ConnectorLogsView({ ssoEnterpriseId }: { ssoEnterpriseId: string
   const jobs: Job[] = data?.data ?? [];
   const meta = data?.meta ?? { total: 0, page: 1 };
   const totalPages = Math.max(1, Math.ceil((meta.total ?? 0) / 30));
+
+  async function handleExport() {
+    setExporting(true);
+    try {
+      const BATCH = 1000;
+      const allJobs: Job[] = [];
+      let p = 1;
+      while (true) {
+        const res = await getConnectorJobs(ssoEnterpriseId, {
+          connectorId,
+          status,
+          from,
+          to,
+          page: p,
+          limit: BATCH,
+          search: search || undefined,
+        });
+        const batch: Job[] = res?.data ?? [];
+        allJobs.push(...batch);
+        const total: number = res?.meta?.total ?? 0;
+        if (allJobs.length >= total || batch.length < BATCH) break;
+        p++;
+      }
+      const slug = connectorName.replace(/\s+/g, '_').toLowerCase();
+      const dateSlug = `${from.slice(0, 10)}_to_${to.slice(0, 10)}`;
+      const statusSlug = status === 'all' ? 'all' : status;
+      downloadCsv(allJobs, `jobs_${slug}_${statusSlug}_${dateSlug}.csv`);
+    } finally {
+      setExporting(false);
+    }
+  }
 
   if (isError) return <ErrorState />;
 
@@ -211,13 +279,27 @@ export function ConnectorLogsView({ ssoEnterpriseId }: { ssoEnterpriseId: string
             Job logs · {from?.slice(0, 10)} → {to?.slice(0, 10)}
           </p>
         </div>
-        <button
-          onClick={() => refetch()}
-          className="flex items-center gap-1.5 text-xs border border-gray-200 text-gray-500 rounded-lg px-3 py-1.5 hover:bg-gray-50"
-        >
-          <RefreshCw className={cn('w-3.5 h-3.5', isFetching && 'animate-spin')} />
-          <span className="hidden sm:inline">Refresh</span>
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => refetch()}
+            className="flex items-center gap-1.5 text-xs border border-gray-200 text-gray-500 rounded-lg px-3 py-1.5 hover:bg-gray-50"
+          >
+            <RefreshCw className={cn('w-3.5 h-3.5', isFetching && 'animate-spin')} />
+            <span className="hidden sm:inline">Refresh</span>
+          </button>
+          <button
+            onClick={handleExport}
+            disabled={exporting || (meta.total ?? 0) === 0}
+            className="flex items-center gap-1.5 text-xs font-medium text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg px-3 py-1.5 transition-colors"
+          >
+            {exporting
+              ? <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+              : <Download className="w-3.5 h-3.5" />}
+            <span className="hidden sm:inline">
+              {exporting ? 'Exporting…' : `Export CSV${status !== 'all' ? ` (${status})` : ''}`}
+            </span>
+          </button>
+        </div>
       </div>
 
       {/* Status tabs + search bar row */}
