@@ -10,8 +10,8 @@ COPY package.json package-lock.json ./
 COPY apps/api/package.json  ./apps/api/
 COPY apps/web/package.json  ./apps/web/
 
-# Install all workspace deps
-RUN npm ci
+# Install only API workspace deps — avoids pulling in web packages (e.g. Next.js)
+RUN npm ci --workspace=apps/api --ignore-scripts
 
 # Copy API source and compile
 COPY apps/api ./apps/api

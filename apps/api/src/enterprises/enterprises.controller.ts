@@ -69,14 +69,17 @@ export class EnterprisesController {
 
   @Get(':ssoEnterpriseId')
   @ApiOperation({ summary: 'Enterprise detail with connectors and app health (STORY-002)' })
+  @ApiQuery({ name: 'connectorName', required: false, description: 'Scope detail to a single connector by name' })
   async detail(
     @Param('ssoEnterpriseId') ssoEnterpriseId: string,
     @Query() pagination: PaginationDto,
+    @Query('connectorName') connectorName?: string,
   ): Promise<any> {
     const result = await this.svc.getEnterpriseDetail(
       ssoEnterpriseId,
       pagination.fromDate,
       pagination.toDate,
+      connectorName,
     );
     if (!result) throw new NotFoundException('Enterprise not found');
     return { data: result };
