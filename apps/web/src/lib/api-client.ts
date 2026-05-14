@@ -64,6 +64,11 @@ export const getBlobContent = (path: string) =>
   api.get('/jobs/blob', { params: { path } }).then((r) => r.data);
 
 
+// ---- Connector Catalog ----
+/** All connectors with their enterprise count and tracked outbound events. */
+export const getConnectorCatalog = () =>
+  api.get('/enterprises/connector-catalog').then((r) => r.data);
+
 // ---- Event Recon ----
 /**
  * Per-outbound-event reconciliation: GIP job counts vs Zwing source counts

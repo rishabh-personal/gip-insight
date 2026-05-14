@@ -33,6 +33,12 @@ export class EnterprisesController {
     return { data };
   }
 
+  @Get('connector-catalog')
+  @ApiOperation({ summary: 'Connector catalog — each connector with enterprise count and tracked outbound events' })
+  async connectorCatalog(): Promise<any> {
+    return this.svc.listConnectorCatalog();
+  }
+
   @Get(':ssoEnterpriseId/metrics')
   @ApiOperation({ summary: 'Async metrics for a single enterprise — job stats + sync gap (STORY-001)' })
   @ApiQuery({ name: 'connectorName', required: false, description: 'Scope metrics to a single connector (connector-tab mode)' })
