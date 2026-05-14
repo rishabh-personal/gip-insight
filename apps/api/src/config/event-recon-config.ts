@@ -99,18 +99,16 @@ export const EVENT_SOURCE_CONFIGS: Record<string, EventSourceConfig> = {
   // ── Add more entries here ────────────────────────────────────────────────
 
  
-  //   'zpos-core.order.created': {
-  //   label: 'POS Order',
-  //   tableName: 'orders',
-  //   refDocField: 'order_id',
-  //   dateField: 'created_at',
-  //   extraWhere: "transaction_sub_type = 'Order'",
-  //   selectFields: [  
-  //     'order_id',
-  //     'store_id',
-  //     'transaction_type',
-  //     'transaction_sub_type',
-  //     'status',
-  //     'created_at',],
-  // },
+    'pos-core.approval-request.created': {
+    label: 'Approval Request',
+    tableName: 'approval_workflow_requests',
+    refDocField: 'ulid',
+    dateField: 'created_at',
+    extraWhere: "",
+    selectFields: [  
+      'ulid',
+      'status',
+      'stage',
+      'created_at',],
+  },
 };

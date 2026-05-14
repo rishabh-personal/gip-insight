@@ -236,15 +236,23 @@ export class EnterprisesService {
     };
   }
 
-  async getEnterpriseDetail(ssoEnterpriseId: string, from: Date, to: Date): Promise<any> {
+  async getEnterpriseDetail(
+    ssoEnterpriseId: string,
+    from: Date,
+    to: Date,
+    connectorName?: string,
+  ): Promise<any> {
     const enterprise = await this.enterpriseModel.findOne({ ssoEnterpriseId }).lean();
     if (!enterprise) return null;
 
     const vendorRows = await this.getVendorRows([ssoEnterpriseId]);
     const vendor = vendorRows[0] ?? null;
 
+    const connectorFilter: any = { ssoEnterpriseId, deletedOn: null };
+    if (connectorName) connectorFilter.name = connectorName;
+
     const connectors = await this.connectorModel
-      .find({ ssoEnterpriseId, deletedOn: null })
+      .find(connectorFilter)
       .lean();
 
     const connectorIds = connectors.map((c) => c._id);

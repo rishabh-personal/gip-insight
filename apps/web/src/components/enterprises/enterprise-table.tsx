@@ -100,9 +100,11 @@ function EnterpriseCard({
     successRate >= 90 ? 'text-yellow-600' :
                         'text-red-600';
 
+  const detailUrl = `/enterprises/${id}?from=${from}&to=${to}${connectorName ? `&connectorName=${encodeURIComponent(connectorName)}` : ''}`;
+
   return (
     <div
-      onClick={() => router.push(`/enterprises/${id}?from=${from}&to=${to}`)}
+      onClick={() => router.push(detailUrl)}
       className={cn(
         'bg-white rounded-xl border border-gray-200 p-4 cursor-pointer active:bg-gray-50 transition-colors',
         important && hasFailed && 'border-red-200 bg-red-50',
@@ -208,9 +210,11 @@ function EnterpriseRow({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasFailed, important]);
 
+  const detailUrl = `/enterprises/${id}?from=${from}&to=${to}${connectorName ? `&connectorName=${encodeURIComponent(connectorName)}` : ''}`;
+
   return (
     <tr
-      onClick={() => router.push(`/enterprises/${id}?from=${from}&to=${to}`)}
+      onClick={() => router.push(detailUrl)}
       className={cn(
         'cursor-pointer transition-colors',
         important && hasFailed ? 'bg-red-50 hover:bg-red-100' : 'hover:bg-gray-50',

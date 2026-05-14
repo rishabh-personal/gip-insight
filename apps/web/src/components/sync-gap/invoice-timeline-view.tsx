@@ -4,7 +4,7 @@ import { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { getInvoiceTimeline } from '@/lib/api-client';
+import { getInvoiceTimeline, getEventRecon } from '@/lib/api-client';
 import { useDateRange } from '@/hooks/use-date-range';
 import { cn } from '@/lib/utils';
 import { PageLoader, ErrorState } from '@/components/ui/loading';
@@ -130,6 +130,22 @@ export function InvoiceTimelineView({ ssoEnterpriseId }: { ssoEnterpriseId: stri
 
   const connectorId   = searchParams.get('connectorId')   ?? undefined;
   const connectorName = searchParams.get('connectorName') ?? undefined;
+  const eventCode     = searchParams.get('eventCode')     ?? undefined;
+  const eventLabel    = searchParams.get('eventLabel')    ?? undefined;
+
+  // Available events for this enterprise (used for event switcher tabs)
+  const { data: eventReconData } = useQuery({
+    queryKey: ['event-recon-tabs', ssoEnterpriseId, from, to],
+    queryFn: () => getEventRecon(ssoEnterpriseId, { from, to }),
+    staleTime: 300_000,
+  });
+  const availableEvents: { code: string; label: string }[] = useMemo(() => {
+    const evs = eventReconData?.data?.events ?? [];
+    return evs.map((ev: any) => ({
+      code: ev.outboundEventCode,
+      label: ev.sourceLabel ?? ev.outboundEventCode,
+    }));
+  }, [eventReconData]);
 
   // Filters
   const [statusFilter, setStatusFilter] = useState<GipStatus | 'all'>('all');
@@ -142,8 +158,12 @@ export function InvoiceTimelineView({ ssoEnterpriseId }: { ssoEnterpriseId: stri
   const [page, setPage] = useState(1);
 
   const { data, isLoading, isError } = useQuery({
-    queryKey: ['invoice-timeline', ssoEnterpriseId, from, to, connectorId],
-    queryFn: () => getInvoiceTimeline(ssoEnterpriseId, { from, to, connectorId }),
+    queryKey: ['invoice-timeline', ssoEnterpriseId, from, to, connectorId, eventCode],
+    queryFn: () => getInvoiceTimeline(ssoEnterpriseId, {
+      from, to,
+      ...(connectorId ? { connectorId } : {}),
+      ...(eventCode   ? { eventCode }   : {}),
+    }),
     staleTime: 60_000,
   });
 
@@ -213,14 +233,62 @@ export function InvoiceTimelineView({ ssoEnterpriseId }: { ssoEnterpriseId: stri
         </button>
         <span>/</span>
         <span className="text-gray-900 font-medium">
-          Invoice Timeline — {enterprise.tradeName ?? ssoEnterpriseId}
+          {eventLabel ? `${eventLabel} Timeline` : 'Timeline'} — {enterprise.tradeName ?? ssoEnterpriseId}
         </span>
         {connectorName && (
           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-50 text-indigo-700 border border-indigo-200">
-            Connector: {connectorName}
+            {connectorName}
+          </span>
+        )}
+        {eventLabel && (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-purple-50 text-purple-700 border border-purple-200">
+            {eventLabel}
           </span>
         )}
       </div>
+
+      {/* Event switcher tabs — shown when multiple events are available */}
+      {availableEvents.length > 1 && (
+        <div className="flex items-center gap-1 overflow-x-auto scrollbar-hide border-b border-gray-200 -mb-1">
+          <button
+            onClick={() => {
+              const params = new URLSearchParams(searchParams.toString());
+              params.delete('eventCode');
+              params.delete('eventLabel');
+              router.push(`/enterprises/${ssoEnterpriseId}/invoice-timeline?${params.toString()}`);
+            }}
+            className={cn(
+              'flex-shrink-0 px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors whitespace-nowrap',
+              !eventCode
+                ? 'border-indigo-600 text-indigo-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700',
+            )}
+          >
+            All Events
+          </button>
+          {availableEvents.map((ev) => (
+            <button
+              key={ev.code}
+              onClick={() => {
+                const params = new URLSearchParams(searchParams.toString());
+                params.set('eventCode', ev.code);
+                params.set('eventLabel', ev.label);
+                router.push(`/enterprises/${ssoEnterpriseId}/invoice-timeline?${params.toString()}`);
+                setPage(1);
+                setStatusFilter('all');
+              }}
+              className={cn(
+                'flex-shrink-0 px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors whitespace-nowrap',
+                eventCode === ev.code
+                  ? 'border-purple-600 text-purple-700'
+                  : 'border-transparent text-gray-500 hover:text-gray-700',
+              )}
+            >
+              {ev.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Summary stats */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
@@ -257,8 +325,9 @@ export function InvoiceTimelineView({ ssoEnterpriseId }: { ssoEnterpriseId: stri
             const slug = enterprise.tradeName
               ? enterprise.tradeName.replace(/\s+/g, '_').toLowerCase()
               : ssoEnterpriseId;
+            const eventSlug = (eventLabel ?? 'all').replace(/\s+/g, '_').toLowerCase();
             const dateSlug = `${from.slice(0, 10)}_to_${to.slice(0, 10)}`;
-            exportCsv(sorted, `invoice_timeline_${slug}_${dateSlug}.csv`);
+            exportCsv(sorted, `timeline_${eventSlug}_${slug}_${dateSlug}.csv`);
           }}
           disabled={sorted.length === 0}
           className="ml-auto flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed rounded-lg transition-colors"

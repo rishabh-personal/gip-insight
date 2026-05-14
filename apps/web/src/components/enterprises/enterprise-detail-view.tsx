@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { getEnterprise } from '@/lib/api-client';
 import { useDateRange } from '@/hooks/use-date-range';
@@ -12,16 +12,20 @@ import { StatCard } from '@/components/ui/stat-card';
 import { Badge } from '@/components/ui/badge';
 import {
   ChevronRight, ChevronDown, ChevronUp, AlertCircle, Activity, ArrowLeft, GitBranch, Database,
-  Copy, Check, ExternalLink, CheckCircle2, Clock, BarChart2,
+  Copy, Check, ExternalLink, CheckCircle2, Clock, BarChart2, Zap,
 } from 'lucide-react';
 
 export function EnterpriseDetailView({ ssoEnterpriseId }: { ssoEnterpriseId: string }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { from, to } = useDateRange();
 
+  // If navigated from the enterprise list with an active connector filter, scope the detail to that connector
+  const connectorName = searchParams.get('connectorName') || undefined;
+
   const { data, isLoading, isError } = useQuery({
-    queryKey: ['enterprise-detail', ssoEnterpriseId, from, to],
-    queryFn: () => getEnterprise(ssoEnterpriseId, { from, to }),
+    queryKey: ['enterprise-detail', ssoEnterpriseId, from, to, connectorName ?? ''],
+    queryFn: () => getEnterprise(ssoEnterpriseId, { from, to, ...(connectorName ? { connectorName } : {}) }),
   });
 
   if (isLoading) return <PageLoader />;
@@ -34,12 +38,21 @@ export function EnterpriseDetailView({ ssoEnterpriseId }: { ssoEnterpriseId: str
   return (
     <div className="space-y-6">
       {/* Breadcrumb */}
-      <div className="flex items-center gap-2 text-sm text-gray-500">
+      <div className="flex items-center gap-2 text-sm text-gray-500 flex-wrap">
         <button onClick={() => router.push('/enterprises')} className="flex items-center gap-1 hover:text-gray-700">
           <ArrowLeft className="w-3.5 h-3.5" /> Enterprises
         </button>
         <ChevronRight className="w-3.5 h-3.5" />
         <span className="text-gray-900 font-medium">{enterprise?.tradeName}</span>
+        {connectorName && (
+          <>
+            <ChevronRight className="w-3.5 h-3.5" />
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-50 border border-indigo-200 text-indigo-700">
+              <Zap className="w-3 h-3" />
+              {connectorName}
+            </span>
+          </>
+        )}
       </div>
 
       {/* Enterprise header */}
@@ -100,7 +113,9 @@ export function EnterpriseDetailView({ ssoEnterpriseId }: { ssoEnterpriseId: str
 
       {/* Connectors */}
       <div>
-        <h3 className="text-sm font-semibold text-gray-700 mb-3">Connectors</h3>
+        <h3 className="text-sm font-semibold text-gray-700 mb-3">
+          {connectorName ? `Connector · ${connectorName}` : 'Connectors'}
+        </h3>
         {connectors.length === 0 ? (
           <EmptyState message="No connectors configured" />
         ) : (
@@ -359,6 +374,7 @@ function ConnectorCard({
                 <th className="pb-1.5 font-medium text-right pr-3">Miss</th>
                 <th className="pb-1.5 font-medium text-right">Rate</th>
                 <th className="pb-1.5 w-14"></th>
+                <th className="pb-1.5 w-12"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-50">
@@ -429,6 +445,19 @@ function ConnectorCard({
                             : em?.succeeded > 0
                               ? <span className="text-[10px] px-1.5 py-0.5 bg-green-50 text-green-600 rounded font-medium">OK</span>
                               : null}
+                    </td>
+                    {/* Timeline action — only for events with a Zwing source config */}
+                    <td className="py-1.5 pl-2 text-right">
+                      {em?.sourceConfigured && mp.outboundEvent?.eventCode && (
+                        <Link
+                          href={`/enterprises/${ssoEnterpriseId}/invoice-timeline?connectorId=${c._id}&connectorName=${encodeURIComponent(c.name)}&eventCode=${encodeURIComponent(mp.outboundEvent.eventCode)}&eventLabel=${encodeURIComponent(em.sourceLabel ?? mp.outboundEvent.eventCode)}&from=${from}&to=${to}`}
+                          className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 bg-purple-50 text-purple-600 rounded font-medium hover:bg-purple-100 transition-colors"
+                          title={`Timeline for ${em.sourceLabel ?? mp.outboundEvent.eventCode}`}
+                        >
+                          <Clock className="w-2.5 h-2.5" />
+                          View
+                        </Link>
+                      )}
                     </td>
                   </tr>
                 );
