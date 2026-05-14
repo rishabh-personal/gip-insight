@@ -110,6 +110,70 @@ export class EnterprisesService {
       .map((name) => ({ name }));
   }
 
+  /**
+   * Returns all connectors with their enterprise count and tracked outbound events.
+   * Used by the Connector Health page.
+   */
+  async listConnectorCatalog(): Promise<{
+    connectors: { name: string; enterpriseCount: number; events: { eventCode: string; label: string }[] }[];
+  }> {
+    // Group connectors by name to get enterprise counts and all connector IDs per name
+    const groups = await this.connectorModel.aggregate([
+      { $match: { deletedOn: null } },
+      {
+        $group: {
+          _id: '$name',
+          enterpriseIds: { $addToSet: '$ssoEnterpriseId' },
+          connectorIds: { $addToSet: '$_id' },
+        },
+      },
+      { $project: { name: '$_id', enterpriseCount: { $size: '$enterpriseIds' }, connectorIds: 1 } },
+      { $sort: { name: 1 } },
+    ]);
+
+    if (!groups.length) return { connectors: [] };
+
+    const allConnectorIds = groups.flatMap((g) => g.connectorIds);
+
+    const mappings = await this.cemModel
+      .find({ connectorId: { $in: allConnectorIds } }, { connectorId: 1, outboundEventId: 1 })
+      .lean();
+
+    const outboundIds = [...new Set(mappings.map((m) => m.outboundEventId?.toString()).filter(Boolean))];
+
+    const eventDocs = await this.eventModel
+      .find({ _id: { $in: outboundIds } }, { eventCode: 1, name: 1 })
+      .lean();
+
+    const eventById = new Map(eventDocs.map((e) => [e._id.toString(), { eventCode: e.eventCode, label: e.name }]));
+
+    const eventsByConnectorId = new Map<string, { eventCode: string; label: string }[]>();
+    for (const m of mappings) {
+      const cid = m.connectorId.toString();
+      const ev = eventById.get(m.outboundEventId?.toString());
+      if (ev) {
+        if (!eventsByConnectorId.has(cid)) eventsByConnectorId.set(cid, []);
+        eventsByConnectorId.get(cid)!.push(ev);
+      }
+    }
+
+    const connectors = groups.map((g) => {
+      const seen = new Map<string, { eventCode: string; label: string }>();
+      for (const cid of g.connectorIds) {
+        for (const ev of eventsByConnectorId.get(cid.toString()) ?? []) {
+          seen.set(ev.eventCode, ev);
+        }
+      }
+      return {
+        name: g.name,
+        enterpriseCount: g.enterpriseCount,
+        events: [...seen.values()].sort((a, b) => a.eventCode.localeCompare(b.eventCode)),
+      };
+    });
+
+    return { connectors };
+  }
+
   /** Returns distinct app names used as private apps (for the filter dropdown). */
   async listApps(): Promise<any> {
     const apps = await this.appModel
