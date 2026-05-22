@@ -46,8 +46,9 @@ async function bootstrap() {
   const { ValidationPipe } = await import('@nestjs/common');
   const { SwaggerModule, DocumentBuilder } = await import('@nestjs/swagger');
   const { ResponseInterceptor } = await import('./common/interceptors/response.interceptor');
+  const { ExpressAdapter } = await import('@nestjs/platform-express');
 
-  const app = await NestFactory.create(AppModule, { bufferLogs: true });
+  const app = await NestFactory.create(AppModule, new ExpressAdapter(), { bufferLogs: true });
   app.enableCors({ origin: '*' });
   app.useGlobalPipes(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: false }));
   app.useGlobalInterceptors(new ResponseInterceptor());
