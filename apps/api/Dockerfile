@@ -17,16 +17,18 @@ RUN npm ci --workspace=apps/api --ignore-scripts
 COPY apps/api ./apps/api
 RUN npm run build --workspace=apps/api
 
-# Remove dev dependencies
-RUN npm prune --omit=dev
+# Remove dev dependencies from both root and workspace-local node_modules
+RUN npm prune --omit=dev --workspace=apps/api
 
 # ─── Stage 2: Production ─────────────────────────────────────────────────────
 FROM node:20-alpine AS runner
 WORKDIR /app
 
-# Copy pruned node_modules (includes pre-built native binaries for Alpine)
-COPY --from=builder /app/node_modules    ./node_modules
-COPY --from=builder /app/apps/api/dist  ./apps/api/dist
+# Copy pruned node_modules — both root (hoisted packages) and workspace-local
+# (packages npm didn't hoist, e.g. @nestjs/platform-express, @nestjs/swagger)
+COPY --from=builder /app/node_modules              ./node_modules
+COPY --from=builder /app/apps/api/node_modules     ./apps/api/node_modules
+COPY --from=builder /app/apps/api/dist             ./apps/api/dist
 
 # Needed so Node can resolve workspace package names
 COPY package.json              ./
