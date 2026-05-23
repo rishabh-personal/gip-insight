@@ -11,14 +11,18 @@ export function formatDate(date: string | Date | null | undefined): string {
   return format(new Date(date), 'dd MMM yyyy, HH:mm');
 }
 
-export type DatePreset = 'today' | '1h' | '6h' | '24h' | '7d' | '30d';
+export type DatePreset = 'today' | 'yesterday' | '1h' | '6h' | '24h' | '7d' | '30d';
 
 export function getPresetRange(preset: DatePreset): { from: Date; to: Date } {
   const now = new Date();
   if (preset === 'today') {
     return { from: startOfDay(now), to: endOfDay(now) };
   }
-  const presetMap: Record<Exclude<DatePreset, 'today'>, Date> = {
+  if (preset === 'yesterday') {
+    const yesterday = subDays(now, 1);
+    return { from: startOfDay(yesterday), to: endOfDay(yesterday) };
+  }
+  const presetMap: Record<Exclude<DatePreset, 'today' | 'yesterday'>, Date> = {
     '1h':  subHours(now, 1),
     '6h':  subHours(now, 6),
     '24h': subHours(now, 24),
