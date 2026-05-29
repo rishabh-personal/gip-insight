@@ -64,7 +64,7 @@ export interface EventSourceConfig {
 }
 
 /** Default event code used when no eventCode is provided to sync-gap endpoints. */
-export const DEFAULT_INVOICE_EVENT_CODE = 'order.invoice.created.v1';
+export const DEFAULT_INVOICE_EVENT_CODE = 'zpos-inventory.invoice.created';
 
 /**
  * Keyed by EventCatalog.eventCode (exact string match).

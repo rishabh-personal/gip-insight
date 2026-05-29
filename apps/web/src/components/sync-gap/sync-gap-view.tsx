@@ -67,13 +67,13 @@ export function SyncGapView({ ssoEnterpriseId }: { ssoEnterpriseId: string }) {
   const [failedPage, setFailedPage] = useState(1);
 
   const { data, isLoading, isError, refetch, isFetching } = useQuery({
-    queryKey: ['sync-gap', ssoEnterpriseId, from, to],
-    queryFn: () => getSyncGap(ssoEnterpriseId, { from, to }),
+    queryKey: ['sync-gap', ssoEnterpriseId, from, to, connectorId ?? ''],
+    queryFn: () => getSyncGap(ssoEnterpriseId, { from, to, ...(connectorId ? { connectorId } : {}) }),
   });
 
   const { data: pendingData, isLoading: pendingLoading, refetch: pendingRefetch, isFetching: pendingFetching } = useQuery({
-    queryKey: ['pending-invoices', ssoEnterpriseId, from, to],
-    queryFn: () => getPendingInvoices(ssoEnterpriseId, { from, to }),
+    queryKey: ['pending-invoices', ssoEnterpriseId, from, to, connectorId ?? ''],
+    queryFn: () => getPendingInvoices(ssoEnterpriseId, { from, to, ...(connectorId ? { connectorId } : {}) }),
     enabled: activeTab === 'pending',
   });
 
@@ -182,7 +182,7 @@ export function SyncGapView({ ssoEnterpriseId }: { ssoEnterpriseId: string }) {
       {/* Breadcrumb */}
       <div className="flex items-center gap-2 text-sm text-gray-500">
         <button
-          onClick={() => router.push(`/enterprises/${ssoEnterpriseId}?from=${from}&to=${to}`)}
+          onClick={() => router.push(`/enterprises/${ssoEnterpriseId}?from=${from}&to=${to}${connectorName ? `&connectorName=${encodeURIComponent(connectorName)}` : ''}`)}
           className="flex items-center gap-1 hover:text-gray-700"
         >
           <ArrowLeft className="w-3.5 h-3.5" /> {d.enterprise?.tradeName || ssoEnterpriseId}

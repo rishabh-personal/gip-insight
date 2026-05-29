@@ -9,7 +9,7 @@ import { EventCatalog } from '../schemas/event-catalog.schema';
 import { DipJob } from '../schemas/dip-job.schema';
 import { MysqlTenantService } from '../database/mysql-tenant.service';
 import { ZwingStatusService, errMsg } from '../common/zwing-status.service';
-import { EVENT_SOURCE_CONFIGS } from '../config/event-recon-config';
+import { EVENT_SOURCE_CONFIGS, DEFAULT_INVOICE_EVENT_CODE } from '../config/event-recon-config';
 
 @Injectable()
 export class EnterprisesService {
@@ -209,7 +209,13 @@ export class EnterprisesService {
     to: Date,
     connectorName?: string,
   ): Promise<any> {
-    const vendorRows = await this.getVendorRows([ssoEnterpriseId]);
+    // Vendor lookup + optional connector lookup run in parallel since neither depends on the other.
+    const [vendorRows, connectorDocsRaw] = await Promise.all([
+      this.getVendorRows([ssoEnterpriseId]),
+      connectorName
+        ? this.connectorModel.find({ ssoEnterpriseId, name: connectorName, deletedOn: null }, { _id: 1 }).lean()
+        : Promise.resolve(null),
+    ]);
     const dbName = vendorRows[0]?.db_name ?? null;
 
     if (!dbName) {
@@ -219,14 +225,9 @@ export class EnterprisesService {
       };
     }
 
-    // Resolve connector IDs when a specific connector tab is selected
     let connectorIds: string[] | undefined;
     if (connectorName) {
-      const connectorDocs = await this.connectorModel
-        .find({ ssoEnterpriseId, name: connectorName, deletedOn: null }, { _id: 1 })
-        .lean();
-      connectorIds = connectorDocs.map((c) => c._id.toString());
-      // No connector found for this enterprise — return zeroed metrics
+      connectorIds = (connectorDocsRaw ?? []).map((c) => c._id.toString());
       if (!connectorIds.length) {
         return {
           ssoEnterpriseId, health: 'green', dbName,
@@ -309,15 +310,16 @@ export class EnterprisesService {
     const enterprise = await this.enterpriseModel.findOne({ ssoEnterpriseId }).lean();
     if (!enterprise) return null;
 
-    const vendorRows = await this.getVendorRows([ssoEnterpriseId]);
-    const vendor = vendorRows[0] ?? null;
-
+    // ── Round 1: vendor lookup + connector filter run in parallel ────────────
     const connectorFilter: any = { ssoEnterpriseId, deletedOn: null };
     if (connectorName) connectorFilter.name = connectorName;
 
-    const connectors = await this.connectorModel
-      .find(connectorFilter)
-      .lean();
+    const [vendorRows, connectors] = await Promise.all([
+      this.getVendorRows([ssoEnterpriseId]),
+      this.connectorModel.find(connectorFilter).lean(),
+    ]);
+    const vendor = vendorRows[0] ?? null;
+    const dbName = vendor?.db_name ?? null;
 
     const connectorIds = connectors.map((c) => c._id);
     const appIds = [
@@ -327,6 +329,7 @@ export class EnterprisesService {
       ]),
     ].filter(Boolean);
 
+    // ── Round 2: apps + CEM list in parallel ─────────────────────────────────
     const [apps, cemList] = await Promise.all([
       this.appModel.find({ _id: { $in: appIds.map((id) => new Types.ObjectId(id)) } }).lean(),
       this.cemModel.find({ connectorId: { $in: connectorIds }, isEnabled: true }).lean(),
@@ -342,22 +345,77 @@ export class EnterprisesService {
       ]),
     ].filter(Boolean);
 
+    // ── Round 3: fire buildZwingJobStatus early (MySQL + large Mongo $in) ────
+    // While it runs, fetch the event catalog (fast) so we can compute eventMap
+    // and classify CEMs before the slow query returns.
+    const zwingStatusPromise = dbName
+      ? this.zwingStatus.buildZwingJobStatus(ssoEnterpriseId, dbName, from, to)
+      : Promise.resolve({ invoiceIds: [] as string[], byInvoice: new Map<string, any>(), byPair: [] as any[] });
+
     const events = await this.eventModel
       .find({ _id: { $in: eventIds.map((id) => new Types.ObjectId(id)) } })
       .lean();
     const eventMap: Record<string, any> = {};
     for (const ev of events) eventMap[ev._id.toString()] = ev;
 
-    const dbName = vendor?.db_name ?? null;
-    let byPair: Array<{ refDocNo: string; connectorId: any; hasSuccess: boolean; hasFailed: boolean; hasPendingOnly: boolean }> = [];
-    let zwingInvoiceIds: string[] = [];
-    let byInvoice: Map<string, { hasSuccess: boolean; hasAnyJob: boolean; hasAnyFailed: boolean; hasPendingOnly: boolean }> = new Map();
-    if (dbName) {
-      const status = await this.zwingStatus.buildZwingJobStatus(ssoEnterpriseId, dbName, from, to);
-      byPair = status.byPair;
-      zwingInvoiceIds = status.invoiceIds;
-      byInvoice = status.byInvoice;
+    // Classify CEMs: configured events use source-ID-scoped Mongo metrics;
+    // unconfigured events fall back to transactionDate-bounded metrics.
+    const unconfiguredCemIds: Types.ObjectId[] = [];
+    for (const m of cemList) {
+      const code = eventMap[m.outboundEventId?.toString()]?.eventCode as string | undefined;
+      if (!code || !EVENT_SOURCE_CONFIGS[code]) unconfiguredCemIds.push(m._id);
     }
+
+    // ── Round 4 (parallel): wait for buildZwingJobStatus + unconfigured metrics
+    // Unconfigured CEMs still use transactionDate-bounded aggregation as fallback.
+    // Configured CEMs are handled later by the source-ID-scoped aggregation —
+    // running the full eventMetricsRaw here for those would be wasted work.
+    const [zwingStatus, unconfiguredMetricsRaw] = await Promise.all([
+      zwingStatusPromise,
+      unconfiguredCemIds.length > 0
+        ? this.jobModel.aggregate([
+            {
+              $match: {
+                ssoEnterpriseId,
+                transactionDate:     { $gte: from, $lte: to },
+                connectorAppEventId: { $in: unconfiguredCemIds },
+              },
+            },
+            {
+              $group: {
+                _id: { refDocNo: '$refDocNo', connectorAppEventId: '$connectorAppEventId' },
+                hasSuccess: { $max: { $cond: [{ $eq: ['$status', 'success'] }, 1, 0] } },
+                hasFailed: {
+                  $max: {
+                    $cond: [
+                      {
+                        $or: [
+                          { $eq: ['$status', 'failed'] },
+                          { $gt: [{ $size: { $filter: { input: { $ifNull: ['$timestamps', []] }, as: 't', cond: { $eq: ['$$t.status', 'failed'] } } } }, 0] },
+                        ],
+                      },
+                      1, 0,
+                    ],
+                  },
+                },
+                hasPending: { $max: { $cond: [{ $in: ['$status', ['pending', 'processing']] }, 1, 0] } },
+              },
+            },
+            {
+              $group: {
+                _id:       '$_id.connectorAppEventId',
+                succeeded: { $sum: '$hasSuccess' },
+                failed:    { $sum: { $cond: [{ $and: [{ $eq: ['$hasFailed', 1] }, { $eq: ['$hasSuccess', 0] }] }, 1, 0] } },
+                pending:   { $sum: { $cond: [{ $and: [{ $eq: ['$hasPending', 1] }, { $eq: ['$hasSuccess', 0] }, { $eq: ['$hasFailed', 0] }] }, 1, 0] } },
+              },
+            },
+          ])
+        : Promise.resolve([] as any[]),
+    ]);
+
+    const byPair         = zwingStatus.byPair;
+    const zwingInvoiceIds = zwingStatus.invoiceIds;
+    const byInvoice      = zwingStatus.byInvoice;
 
     // Overall invoice-level totals — success takes priority.
     // Connector-level breakdown below shows per-connector failures.
@@ -400,29 +458,102 @@ export class EnterprisesService {
       invoicesWithJobByConnector.get(cid)!.add(String(p.refDocNo));
     }
 
-    // ── Event-wise metrics: group jobs by connectorAppEventId (= CEM _id) ──
-    // Filter by connectorAppEventId (not refDocNo) so non-invoice events are
-    // captured correctly — each event type may use a different refDoc domain.
-    const cemObjectIds = cemList.map((m) => m._id);
-    const eventMetricsRaw = cemObjectIds.length > 0
-      ? await this.jobModel.aggregate([
+    // ── Event metrics map: seed with unconfigured-CEM fallback metrics ───────
+    // Configured events are handled below by the source-ID-scoped aggregation;
+    // unconfiguredMetricsRaw was already fetched in parallel with buildZwingJobStatus.
+    const eventMetricsMap = new Map<string, { succeeded: number; failed: number; pending: number }>();
+    for (const row of unconfiguredMetricsRaw) {
+      const cemId = row._id?.toString();
+      if (cemId) eventMetricsMap.set(cemId, { succeeded: row.succeeded, failed: row.failed, pending: row.pending });
+    }
+
+    // ── Source IDs by event code ──────────────────────────────────────────────
+    // buildZwingJobStatus already ran the exact same MySQL query as DEFAULT_INVOICE_EVENT_CODE
+    // (invoices WHERE created_at BETWEEN ? AND ? AND channel_id != 3 AND status = 'SUCCESS').
+    // Reuse its result to avoid a duplicate round-trip. For any future event codes
+    // that map to a different table, we fall back to a targeted MySQL query.
+    const uniqueOutboundCodes = [
+      ...new Set(
+        cemList
+          .map((m) => eventMap[m.outboundEventId?.toString()]?.eventCode)
+          .filter(Boolean),
+      ),
+    ] as string[];
+
+    const sourceIdsByCode = new Map<string, string[] | null>();
+    const remainingTableQueries = new Map<string, { config: (typeof EVENT_SOURCE_CONFIGS)[string]; codes: string[] }>();
+
+    for (const code of uniqueOutboundCodes) {
+      const cfg = EVENT_SOURCE_CONFIGS[code];
+      if (!cfg) continue;
+      if (code === DEFAULT_INVOICE_EVENT_CODE) {
+        // Reuse already-fetched invoice IDs — no extra MySQL round-trip needed.
+        sourceIdsByCode.set(code, zwingInvoiceIds);
+      } else {
+        // Different event code: queue a MySQL query grouped by unique table+filter.
+        const key = `${cfg.tableName}__${cfg.dateField}__${cfg.extraWhere ?? ''}`;
+        if (!remainingTableQueries.has(key)) remainingTableQueries.set(key, { config: cfg, codes: [] });
+        remainingTableQueries.get(key)!.codes.push(code);
+      }
+    }
+
+    // Fetch source IDs for any non-invoice event codes (future-proofing).
+    if (dbName && remainingTableQueries.size > 0) {
+      for (const { config: cfg, codes } of remainingTableQueries.values()) {
+        let ids: string[] | null = null;
+        try {
+          const where = `${cfg.dateField} BETWEEN ? AND ?${cfg.extraWhere ? ` AND ${cfg.extraWhere}` : ''}`;
+          const rows = await this.mysql.query<Record<string, any>>(
+            dbName,
+            `SELECT \`${cfg.refDocField}\` AS id FROM \`${cfg.tableName}\` WHERE ${where}`,
+            [from, to],
+          );
+          ids = (rows as any[]).map((r) => String(r.id));
+        } catch (e) {
+          this.logger.warn(`[EventRecon] MySQL source query failed for table "${cfg.tableName}": ${errMsg(e)}`);
+        }
+        for (const code of codes) sourceIdsByCode.set(code, ids);
+      }
+    }
+
+    // ── Override event metrics with source-ID-scoped MongoDB aggregations ────
+    // Run ALL per-event-code aggregations in parallel — they are independent.
+    await Promise.all(
+      [...sourceIdsByCode.entries()].map(async ([code, sourceIds]) => {
+        if (sourceIds === null) return; // MySQL failed — keep transactionDate-based fallback
+
+        const cemIdsForCode = cemList
+          .filter((m) => eventMap[m.outboundEventId?.toString()]?.eventCode === code)
+          .map((m) => m._id);
+        if (!cemIdsForCode.length) return;
+
+        const cemIdStringsForCode = cemIdsForCode.map((id) => id.toString());
+
+        if (!sourceIds.length) {
+          for (const cemId of cemIdStringsForCode) {
+            eventMetricsMap.set(cemId, { succeeded: 0, failed: 0, pending: 0 });
+          }
+          return;
+        }
+
+        // Filter by connectorId (not connectorAppEventId) so that jobs created by
+        // historically-disabled CEMs are still counted — matching the connector-level
+        // tiles which group by connectorId via buildZwingJobStatus.
+        const connectorIdsForCode = cemList
+          .filter((m) => eventMap[m.outboundEventId?.toString()]?.eventCode === code)
+          .map((m) => m.connectorId);
+
+        const scopedMetrics = await this.jobModel.aggregate([
           {
             $match: {
               ssoEnterpriseId,
-              transactionDate:     { $gte: from, $lte: to },
-              connectorAppEventId: { $in: cemObjectIds },
+              refDocNo:    { $in: sourceIds },
+              connectorId: { $in: connectorIdsForCode },
             },
           },
           {
-            // Collapse retries: one row per (refDocNo, connectorAppEventId).
-            // hasFailed checks both the top-level status AND the timestamps array
-            // so that zombie jobs (stuck in 'processing' after failing all retries)
-            // are correctly classified as failed, not pending.
             $group: {
-              _id: {
-                refDocNo:            '$refDocNo',
-                connectorAppEventId: '$connectorAppEventId',
-              },
+              _id: { refDocNo: '$refDocNo', connectorId: '$connectorId' },
               hasSuccess: { $max: { $cond: [{ $eq: ['$status', 'success'] }, 1, 0] } },
               hasFailed: {
                 $max: {
@@ -455,69 +586,36 @@ export class EnterprisesService {
             },
           },
           {
-            // Roll up to connectorAppEventId level — unique-refDoc counts per CEM
             $group: {
-              _id: '$_id.connectorAppEventId',
+              _id:       '$_id.connectorId',
               succeeded: { $sum: '$hasSuccess' },
               failed:    { $sum: { $cond: [{ $and: [{ $eq: ['$hasFailed', 1] }, { $eq: ['$hasSuccess', 0] }] }, 1, 0] } },
               pending:   { $sum: { $cond: [{ $and: [{ $eq: ['$hasPending', 1] }, { $eq: ['$hasSuccess', 0] }, { $eq: ['$hasFailed', 0] }] }, 1, 0] } },
             },
           },
-        ])
-      : [];
+        ]);
 
-    // Index by CEM _id string → metrics
-    const eventMetricsMap = new Map<string, { succeeded: number; failed: number; pending: number }>();
-    for (const row of eventMetricsRaw) {
-      const cemId = row._id?.toString();
-      if (!cemId) continue;
-      eventMetricsMap.set(cemId, {
-        succeeded: row.succeeded,
-        failed:    row.failed,
-        pending:   row.pending,
-      });
-    }
-
-    // ── Event source counts from Zwing MySQL (one query per unique table) ────
-    // Build a map: outboundEventCode → sourceCount (null = not configured / error)
-    const uniqueOutboundCodes = [
-      ...new Set(
-        cemList
-          .map((m) => eventMap[m.outboundEventId?.toString()]?.eventCode)
-          .filter(Boolean),
-      ),
-    ] as string[];
-
-    // Group by (tableName + extraWhere) so we fire one query per unique source table.
-    const tableQueryMap = new Map<string, { config: (typeof EVENT_SOURCE_CONFIGS)[string]; codes: string[] }>();
-    for (const code of uniqueOutboundCodes) {
-      const cfg = EVENT_SOURCE_CONFIGS[code];
-      if (!cfg) continue;
-      const key = `${cfg.tableName}__${cfg.dateField}__${cfg.extraWhere ?? ''}`;
-      if (!tableQueryMap.has(key)) tableQueryMap.set(key, { config: cfg, codes: [] });
-      tableQueryMap.get(key)!.codes.push(code);
-    }
-
-    const sourceCountByCode = new Map<string, number | null>();
-    if (dbName) {
-      for (const { config: cfg, codes } of tableQueryMap.values()) {
-        let count: number | null = null;
-        try {
-          const where = `${cfg.dateField} BETWEEN ? AND ?${cfg.extraWhere ? ` AND ${cfg.extraWhere}` : ''}`;
-          const rows = await this.mysql.query<{ cnt: number }>(
-            dbName,
-            `SELECT COUNT(*) AS cnt FROM \`${cfg.tableName}\` WHERE ${where}`,
-            [from, to],
-          );
-          count = Number((rows as any[])[0]?.cnt ?? 0);
-        } catch (e) {
-          this.logger.warn(
-            `[EventRecon] MySQL source query failed for table "${cfg.tableName}": ${errMsg(e)}`,
-          );
+        const connectorToCems = new Map<string, string[]>();
+        for (const m of cemList) {
+          if (eventMap[m.outboundEventId?.toString()]?.eventCode !== code) continue;
+          const cid = m.connectorId.toString();
+          if (!connectorToCems.has(cid)) connectorToCems.set(cid, []);
+          connectorToCems.get(cid)!.push(m._id.toString());
         }
-        for (const code of codes) sourceCountByCode.set(code, count);
-      }
-    }
+
+        for (const row of scopedMetrics) {
+          const connectorId = row._id?.toString();
+          if (!connectorId) continue;
+          const cemIds = connectorToCems.get(connectorId) ?? [];
+          for (const cemId of cemIds) {
+            eventMetricsMap.set(cemId, { succeeded: row.succeeded, failed: row.failed, pending: row.pending });
+          }
+        }
+        for (const cemId of cemIdStringsForCode) {
+          if (!eventMetricsMap.has(cemId)) eventMetricsMap.set(cemId, { succeeded: 0, failed: 0, pending: 0 });
+        }
+      }),
+    );
 
     const enrichedConnectors = connectors.map((c) => {
       const cid = c._id.toString();
@@ -545,7 +643,8 @@ export class EnterprisesService {
           const em             = eventMetricsMap.get(m._id.toString());
           const outboundCode   = eventMap[m.outboundEventId?.toString()]?.eventCode as string | undefined;
           const sourceConfig   = outboundCode ? (EVENT_SOURCE_CONFIGS[outboundCode] ?? null) : null;
-          const sourceCount    = outboundCode ? (sourceCountByCode.get(outboundCode) ?? null) : null;
+          const sourceIds2     = outboundCode ? (sourceIdsByCode.get(outboundCode) ?? null) : null;
+          const sourceCount    = sourceIds2 !== null ? sourceIds2.length : null;
 
           // Use event-specific source count when configured; fall back to invoice count.
           const denominator    = sourceCount ?? zwingInvoiceIds.length;
@@ -634,14 +733,12 @@ export class EnterprisesService {
     from: Date,
     to: Date,
   ): Promise<any> {
-    // ── 1. Vendor / DB name ──────────────────────────────────────────────────
-    const vendorRows = await this.getVendorRows([ssoEnterpriseId]);
+    // ── 1+2. Vendor / DB name + Connectors in parallel ───────────────────────
+    const [vendorRows, connectors] = await Promise.all([
+      this.getVendorRows([ssoEnterpriseId]),
+      this.connectorModel.find({ ssoEnterpriseId, deletedOn: null }).lean(),
+    ]);
     const dbName = vendorRows[0]?.db_name ?? null;
-
-    // ── 2. Connectors ────────────────────────────────────────────────────────
-    const connectors = await this.connectorModel
-      .find({ ssoEnterpriseId, deletedOn: null })
-      .lean();
 
     if (!connectors.length) return { events: [] };
 
@@ -655,18 +752,17 @@ export class EnterprisesService {
 
     if (!cems.length) return { events: [] };
 
-    // ── 4. Events ────────────────────────────────────────────────────────────
+    // ── 4+5. Events + GIP job stats in parallel (both need CEMs, not each other)
     const outboundEventIds = [
       ...new Set(cems.map((c) => c.outboundEventId?.toString()).filter(Boolean)),
     ];
-    const eventDocs = await this.eventModel
-      .find({ _id: { $in: outboundEventIds.map((id) => new Types.ObjectId(id)) } })
-      .lean();
-    const eventMap = new Map(eventDocs.map((e) => [e._id.toString(), e]));
-
-    // ── 5. GIP job stats per CEM in the date window ──────────────────────────
     const cemObjectIds = cems.map((c) => c._id);
-    const jobAggs = await this.jobModel.aggregate([
+
+    const [eventDocs, jobAggs] = await Promise.all([
+      this.eventModel
+        .find({ _id: { $in: outboundEventIds.map((id) => new Types.ObjectId(id)) } })
+        .lean(),
+      this.jobModel.aggregate([
       {
         $match: {
           ssoEnterpriseId,
@@ -702,7 +798,10 @@ export class EnterprisesService {
           },
         },
       },
-    ]);
+    ])
+    ]);  // end Promise.all([eventDocs, jobAggs])
+
+    const eventMap = new Map(eventDocs.map((e) => [e._id.toString(), e]));
 
     const cemJobStats = new Map<string, { succeeded: number; failed: number; pending: number }>();
     for (const row of jobAggs) {
@@ -735,14 +834,13 @@ export class EnterprisesService {
       byEvent.get(evId)!.items.push({ cem, connector, stats });
     }
 
-    // ── 7. Build result: query MySQL source table when config exists ─────────
-    const events: any[] = [];
-
-    for (const [evId, { event, items }] of byEvent) {
-      const config = EVENT_SOURCE_CONFIGS[event.eventCode] ?? null;
-      let sourceCount: number | null = null;
-
-      if (config && dbName) {
+    // ── 7. Build result: all MySQL source-count queries run in parallel ───────
+    // Fire all configured-event COUNT queries simultaneously, then assemble results.
+    const byEventEntries = [...byEvent.entries()];
+    const sourceCountResults = await Promise.all(
+      byEventEntries.map(async ([, { event }]) => {
+        const config = EVENT_SOURCE_CONFIGS[event.eventCode] ?? null;
+        if (!config || !dbName) return null;
         try {
           const where = `${config.dateField} BETWEEN ? AND ?${config.extraWhere ? ` AND ${config.extraWhere}` : ''}`;
           const rows = await this.mysql.query<{ cnt: number }>(
@@ -750,13 +848,20 @@ export class EnterprisesService {
             `SELECT COUNT(*) AS cnt FROM \`${config.tableName}\` WHERE ${where}`,
             [from, to],
           );
-          sourceCount = Number((rows as any[])[0]?.cnt ?? null);
+          return Number((rows as any[])[0]?.cnt ?? null);
         } catch (e) {
-          this.logger.warn(
-            `[EventRecon] MySQL source query failed for "${event.eventCode}": ${errMsg(e)}`,
-          );
+          this.logger.warn(`[EventRecon] MySQL source query failed for "${event.eventCode}": ${errMsg(e)}`);
+          return null;
         }
-      }
+      }),
+    );
+
+    const events: any[] = [];
+
+    for (let i = 0; i < byEventEntries.length; i++) {
+      const [evId, { event, items }] = byEventEntries[i];
+      const config = EVENT_SOURCE_CONFIGS[event.eventCode] ?? null;
+      const sourceCount = sourceCountResults[i];
 
       // Aggregate across connectors
       let totalSucceeded = 0, totalFailed = 0, totalPending = 0;

@@ -44,33 +44,38 @@ export class TraceService {
     const enterpriseMap: Record<string, any> = {};
     for (const e of enterprises) enterpriseMap[e.ssoEnterpriseId] = e;
 
-    // Step 2: Fetch Zwing invoice record for each enterprise
+    // Step 2: Fetch Zwing invoice record for each enterprise — all in parallel.
+    // Each enterprise has its own MySQL db_name (vendor table), so we chain
+    // vendor→invoice per enterprise but run all enterprises concurrently.
+    const zwingEntries = await Promise.all(
+      enterpriseIds.map(async (eid) => {
+        const enterprise = enterpriseMap[eid];
+        if (!enterprise?.meta?.zwingVId) return null;
+        try {
+          const vendors = await this.mysql.query(
+            this.mysql.getMasterDb(),
+            `SELECT db_name FROM vendor WHERE sso_enterprise_id = ? AND deleted = 0 LIMIT 1`,
+            [eid],
+          );
+          const dbName = (vendors[0] as any)?.db_name;
+          if (!dbName) return null;
+          const invoices = await this.mysql.query(
+            dbName,
+            `SELECT id, invoice_id, store_id, v_id, status, transaction_type, transaction_sub_type,
+                    total, created_at, updated_at, sync_status
+             FROM invoices WHERE invoice_id = ? LIMIT 1`,
+            [invoiceId],
+          );
+          return invoices[0] ? { eid, row: invoices[0] } : null;
+        } catch (e) {
+          this.logger.warn(`Zwing lookup failed for ${eid}: ${e.message}`);
+          return null;
+        }
+      }),
+    );
     const zwingRecords: Record<string, any> = {};
-    for (const eid of enterpriseIds) {
-      const enterprise = enterpriseMap[eid];
-      if (!enterprise?.meta?.zwingVId) continue;
-
-      try {
-        // Find vendor row to get db_name
-        const vendors = await this.mysql.query(
-          this.mysql.getMasterDb(),
-          `SELECT db_name FROM vendor WHERE sso_enterprise_id = ? AND deleted = 0 LIMIT 1`,
-          [eid],
-        );
-        const dbName = (vendors[0] as any)?.db_name;
-        if (!dbName) continue;
-
-        const invoices = await this.mysql.query(
-          dbName,
-          `SELECT id, invoice_id, store_id, v_id, status, transaction_type, transaction_sub_type,
-                  total, created_at, updated_at, sync_status
-           FROM invoices WHERE invoice_id = ? LIMIT 1`,
-          [invoiceId],
-        );
-        if (invoices[0]) zwingRecords[eid] = invoices[0];
-      } catch (e) {
-        this.logger.warn(`Zwing lookup failed for ${eid}: ${e.message}`);
-      }
+    for (const entry of zwingEntries) {
+      if (entry) zwingRecords[entry.eid] = entry.row;
     }
 
     // Step 3: Enrich jobs with connector/app/event and tasks (batched to avoid N+1)
