@@ -22,12 +22,14 @@ export class SyncGapController {
   @Get('pending')
   @ApiOperation({ summary: 'Source records captured by GIP but stuck in pending/processing state — eligible for re-trigger' })
   @ApiQuery({ name: 'eventCode', required: false, description: `Event code from EVENT_SOURCE_CONFIGS. Defaults to ${DEFAULT_INVOICE_EVENT_CODE}` })
+  @ApiQuery({ name: 'connectorId', required: false, description: 'Restrict pending jobs to a specific connector' })
   async pendingInvoices(
     @Param('ssoEnterpriseId') ssoEnterpriseId: string,
     @Query() pagination: PaginationDto,
     @Query('eventCode') eventCode?: string,
+    @Query('connectorId') connectorId?: string,
   ) {
-    return this.svc.getPendingInvoices(ssoEnterpriseId, pagination.fromDate, pagination.toDate, { eventCode });
+    return this.svc.getPendingInvoices(ssoEnterpriseId, pagination.fromDate, pagination.toDate, { eventCode, connectorId });
   }
 
   @Get('timeline')
@@ -57,17 +59,20 @@ export class SyncGapController {
   @ApiQuery({ name: 'eventCode', required: false, description: `Event code from EVENT_SOURCE_CONFIGS. Defaults to ${DEFAULT_INVOICE_EVENT_CODE}` })
   @ApiQuery({ name: 'transactionType', required: false, enum: ['sales', 'return'], description: 'Invoice-specific: filter by transaction type' })
   @ApiQuery({ name: 'storeId', required: false, description: 'Invoice-specific: filter by store ID' })
+  @ApiQuery({ name: 'connectorId', required: false, description: 'Restrict GIP job lookups to a specific connector — scopes missing/failed counts to that connector only' })
   async syncGap(
     @Param('ssoEnterpriseId') ssoEnterpriseId: string,
     @Query() pagination: PaginationDto,
     @Query('eventCode') eventCode?: string,
     @Query('transactionType') transactionType?: string,
     @Query('storeId') storeId?: string,
+    @Query('connectorId') connectorId?: string,
   ) {
     return this.svc.getSyncGap(ssoEnterpriseId, pagination.fromDate, pagination.toDate, {
       eventCode,
       transactionType,
       storeId,
+      connectorId,
     });
   }
 }

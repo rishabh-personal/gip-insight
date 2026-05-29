@@ -154,7 +154,7 @@ export class SyncGapService {
     ssoEnterpriseId: string,
     from: Date,
     to: Date,
-    opts: { eventCode?: string } = {},
+    opts: { eventCode?: string; connectorId?: string } = {},
   ): Promise<any> {
     const eventCode = opts.eventCode ?? DEFAULT_INVOICE_EVENT_CODE;
     const sourceConfig = EVENT_SOURCE_CONFIGS[eventCode];
@@ -162,10 +162,12 @@ export class SyncGapService {
       return { data: { error: `No source config found for event "${eventCode}". Add it to EVENT_SOURCE_CONFIGS.` } };
     }
 
-    const enterprise = await this.enterpriseModel.findOne({ ssoEnterpriseId }).lean();
+    const [enterprise, dbName] = await Promise.all([
+      this.enterpriseModel.findOne({ ssoEnterpriseId }).lean(),
+      this.resolveDbName(ssoEnterpriseId),
+    ]);
     if (!enterprise) return { data: null };
 
-    const dbName = await this.resolveDbName(ssoEnterpriseId);
     if (!dbName) {
       return {
         data: {
@@ -194,14 +196,23 @@ export class SyncGapService {
     const { byInvoice, byPair } = statusResult;
 
     // hasPendingOnly: jobs exist, no success, and no failure ever — purely in-flight.
-    const pendingIds = new Set(
-      [...byInvoice.entries()]
-        .filter(([, v]) => v.hasPendingOnly)
-        .map(([id]) => id),
-    );
+    // When scoped to a connector, derive pending state from that connector's byPair
+    // entries only, so invoices delivered by another connector are not excluded.
+    const pendingIds = opts.connectorId
+      ? new Set(
+          byPair
+            .filter((p) => p.connectorId?.toString() === opts.connectorId && p.hasPendingOnly)
+            .map((p) => p.refDocNo),
+        )
+      : new Set(
+          [...byInvoice.entries()]
+            .filter(([, v]) => v.hasPendingOnly)
+            .map(([id]) => id),
+        );
 
     const jobInfoMap = new Map<string, { latestDate: Date; latestJobId: unknown }>();
     for (const p of byPair) {
+      if (opts.connectorId && p.connectorId?.toString() !== opts.connectorId) continue;
       if (!p.hasPendingOnly || !pendingIds.has(p.refDocNo)) continue;
       const existing = jobInfoMap.get(p.refDocNo);
       if (!existing || (p.latestDate && p.latestDate > existing.latestDate)) {
@@ -221,12 +232,15 @@ export class SyncGapService {
     // Find pending/processing GIP jobs by transactionDate. This catches jobs
     // whose Zwing created_at is outside the MySQL window (e.g. retriggered
     // events) that Pass 1 would miss entirely.
+    const gipDirectFilter: Record<string, any> = {
+      ssoEnterpriseId,
+      status: { $in: ['pending', 'processing'] },
+      transactionDate: { $gte: from, $lte: to },
+    };
+    if (opts.connectorId) gipDirectFilter.connectorId = new Types.ObjectId(opts.connectorId);
+
     const gipDirectJobs = await this.jobModel
-      .find({
-        ssoEnterpriseId,
-        status: { $in: ['pending', 'processing'] },
-        transactionDate: { $gte: from, $lte: to },
-      })
+      .find(gipDirectFilter)
       .select('refDocNo status updatedAt')
       .lean()
       .catch(() => [] as any[]);
@@ -318,7 +332,7 @@ export class SyncGapService {
     ssoEnterpriseId: string,
     from: Date,
     to: Date,
-    opts: { eventCode?: string; transactionType?: string; storeId?: string } = {},
+    opts: { eventCode?: string; transactionType?: string; storeId?: string; connectorId?: string } = {},
   ) {
     const eventCode = opts.eventCode ?? DEFAULT_INVOICE_EVENT_CODE;
     const sourceConfig = EVENT_SOURCE_CONFIGS[eventCode];
@@ -330,10 +344,12 @@ export class SyncGapService {
       };
     }
 
-    const enterprise = await this.enterpriseModel.findOne({ ssoEnterpriseId }).lean();
+    const [enterprise, dbName] = await Promise.all([
+      this.enterpriseModel.findOne({ ssoEnterpriseId }).lean(),
+      this.resolveDbName(ssoEnterpriseId),
+    ]);
     if (!enterprise) return { data: null };
 
-    const dbName = await this.resolveDbName(ssoEnterpriseId);
     if (!dbName) {
       return {
         data: {
@@ -374,9 +390,14 @@ export class SyncGapService {
     // Adding a transactionDate filter here would falsely report invoices as
     // missed when GIP processed the event outside the queried window
     // (e.g. a Debezium event received a day late, or after a manual retrigger).
+    // When connectorId is provided, restrict to that connector so that missing/
+    // failed counts reflect only this connector's delivery pipeline.
+    const gipJobFilter: Record<string, any> = { ssoEnterpriseId, refDocNo: { $in: sourceIds } };
+    if (opts.connectorId) gipJobFilter.connectorId = new Types.ObjectId(opts.connectorId);
+
     const gipJobs = sourceIds.length
       ? await this.jobModel
-          .find({ ssoEnterpriseId, refDocNo: { $in: sourceIds } })
+          .find(gipJobFilter)
           .select('refDocNo status error updatedAt')
           .lean()
       : [];
@@ -457,12 +478,15 @@ export class SyncGapService {
       }).map((r) => String(r[refDocField])),
     ]);
 
+    const extraJobFilter: Record<string, any> = {
+      ssoEnterpriseId,
+      status: { $in: ['failed', 'processing', 'pending'] },
+      transactionDate: { $gte: from, $lte: to },
+    };
+    if (opts.connectorId) extraJobFilter.connectorId = new Types.ObjectId(opts.connectorId);
+
     const gipExtraJobs = await this.jobModel
-      .find({
-        ssoEnterpriseId,
-        status: { $in: ['failed', 'processing', 'pending'] },
-        transactionDate: { $gte: from, $lte: to },
-      })
+      .find(extraJobFilter)
       .select('refDocNo status error updatedAt')
       .lean()
       .catch(() => [] as any[]);
@@ -602,10 +626,12 @@ export class SyncGapService {
       return { data: { error: `No source config found for event "${eventCode}". Add it to EVENT_SOURCE_CONFIGS.` } };
     }
 
-    const enterprise = await this.enterpriseModel.findOne({ ssoEnterpriseId }).lean();
+    const [enterprise, dbName] = await Promise.all([
+      this.enterpriseModel.findOne({ ssoEnterpriseId }).lean(),
+      this.resolveDbName(ssoEnterpriseId),
+    ]);
     if (!enterprise) return { data: null };
 
-    const dbName = await this.resolveDbName(ssoEnterpriseId);
     if (!dbName) {
       return {
         data: {

@@ -371,56 +371,43 @@ export class DipJobsService {
   private async enrichJobs(jobs: any[]) {
     if (!jobs.length) return [];
 
-    const connectorIds = [...new Set(jobs.map((j) => j.connectorId?.toString()))].filter(Boolean);
-    const appIds = [...new Set([
-      ...jobs.map((j) => j.inboundAppId?.toString()),
-      ...jobs.map((j) => j.outboundAppId?.toString()),
-    ])].filter(Boolean);
+    const connectorIds  = [...new Set(jobs.map((j) => j.connectorId?.toString()))].filter(Boolean);
+    const appIds        = [...new Set([...jobs.map((j) => j.inboundAppId?.toString()), ...jobs.map((j) => j.outboundAppId?.toString())])].filter(Boolean);
     const enterpriseIds = [...new Set(jobs.map((j) => j.ssoEnterpriseId))].filter(Boolean);
+    const cemIds        = [...new Set(jobs.map((j) => j.connectorAppEventId?.toString()))].filter(Boolean);
+    // outboundEventId is stored directly on the job doc — use it to avoid a
+    // sequential CEM→events chain and fetch events in the same round.
+    const eventIds      = [...new Set(jobs.map((j) => j.outboundEventId?.toString()))].filter(Boolean);
 
-    const [connectors, apps, enterprises] = await Promise.all([
-      this.connectorModel.find({
-        _id: { $in: connectorIds.map((id) => new Types.ObjectId(id)) },
-      }).lean(),
-      this.appModel.find({
-        _id: { $in: appIds.map((id) => new Types.ObjectId(id)) },
-      }).lean(),
-      this.enterpriseModel.find({
-        ssoEnterpriseId: { $in: enterpriseIds },
-      }).lean(),
+    const [connectors, apps, enterprises, cems, events] = await Promise.all([
+      connectorIds.length  ? this.connectorModel.find({ _id: { $in: connectorIds.map((id) => new Types.ObjectId(id)) } }).lean()        : Promise.resolve([]),
+      appIds.length        ? this.appModel.find({ _id: { $in: appIds.map((id) => new Types.ObjectId(id)) } }).lean()                    : Promise.resolve([]),
+      enterpriseIds.length ? this.enterpriseModel.find({ ssoEnterpriseId: { $in: enterpriseIds } }).lean()                              : Promise.resolve([]),
+      cemIds.length        ? this.cemModel.find({ _id: { $in: cemIds.map((id) => new Types.ObjectId(id)) } }).lean()                    : Promise.resolve([]),
+      eventIds.length      ? this.eventModel.find({ _id: { $in: eventIds.map((id) => new Types.ObjectId(id)) } }).lean()                : Promise.resolve([]),
     ]);
 
-    const connectorMap: Record<string, any> = {};
-    for (const c of connectors) connectorMap[c._id.toString()] = c;
-    const appMap: Record<string, any> = {};
-    for (const a of apps) appMap[a._id.toString()] = a;
+    const connectorMap: Record<string, any>  = {};
+    for (const c of connectors)  connectorMap[c._id.toString()]    = c;
+    const appMap: Record<string, any>        = {};
+    for (const a of apps)        appMap[a._id.toString()]          = a;
     const enterpriseMap: Record<string, any> = {};
-    for (const e of enterprises) enterpriseMap[e.ssoEnterpriseId] = e;
+    for (const e of enterprises) enterpriseMap[e.ssoEnterpriseId]  = e;
+    const cemMap: Record<string, any>        = {};
+    for (const m of cems)        cemMap[m._id.toString()]          = m;
+    const eventMap: Record<string, any>      = {};
+    for (const ev of events)     eventMap[ev._id.toString()]       = ev;
 
-    const cemIds = [...new Set(jobs.map((j) => j.connectorAppEventId?.toString()))].filter(Boolean);
-    const cems = await this.cemModel.find({
-      _id: { $in: cemIds.map((id) => new Types.ObjectId(id)) },
-    }).lean();
-    const cemMap: Record<string, any> = {};
-    for (const m of cems) cemMap[m._id.toString()] = m;
-
-    const eventIds = [...new Set(cems.map((m) => m.outboundEventId?.toString()))].filter(Boolean);
-    const events = await this.eventModel.find({
-      _id: { $in: eventIds.map((id) => new Types.ObjectId(id)) },
-    }).lean();
-    const eventMap: Record<string, any> = {};
-    for (const ev of events) eventMap[ev._id.toString()] = ev;
-
-    return jobs.map((j) => {
-      const cem = cemMap[j.connectorAppEventId?.toString()];
-      return {
-        ...j,
-        connector: connectorMap[j.connectorId?.toString()],
-        outboundApp: appMap[j.outboundAppId?.toString()],
-        inboundApp: appMap[j.inboundAppId?.toString()],
-        enterprise: enterpriseMap[j.ssoEnterpriseId],
-        event: cem ? eventMap[cem.outboundEventId?.toString()] : null,
-      };
-    });
+    return jobs.map((j) => ({
+      ...j,
+      connector:   connectorMap[j.connectorId?.toString()],
+      outboundApp: appMap[j.outboundAppId?.toString()],
+      inboundApp:  appMap[j.inboundAppId?.toString()],
+      enterprise:  enterpriseMap[j.ssoEnterpriseId],
+      // Prefer the event from the job's own outboundEventId; fall back to CEM lookup.
+      event: eventMap[j.outboundEventId?.toString()] ?? (cemMap[j.connectorAppEventId?.toString()]
+        ? eventMap[cemMap[j.connectorAppEventId?.toString()].outboundEventId?.toString()] ?? null
+        : null),
+    }));
   }
 }
