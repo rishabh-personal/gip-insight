@@ -37,3 +37,10 @@ DipJobSchema.index({ refDocNo: 1, ssoEnterpriseId: 1 });
 DipJobSchema.index({ connectorId: 1, status: 1, transactionDate: -1 });
 DipJobSchema.index({ status: 1, transactionDate: -1 });
 DipJobSchema.index({ refDocNo: 1 });
+// Compound indexes for enterprise-metrics aggregations.
+// connector-scoped path: { connectorId, ssoEnterpriseId, transactionDate } lets
+//   MongoDB satisfy the match with a tight IXSCAN rather than a large refDocNo $in.
+// unscoped path: { ssoEnterpriseId, refDocNo } is a better prefix order than
+//   the existing reversed { refDocNo, ssoEnterpriseId } for enterprise-first queries.
+DipJobSchema.index({ connectorId: 1, ssoEnterpriseId: 1, transactionDate: -1 });
+DipJobSchema.index({ ssoEnterpriseId: 1, refDocNo: 1, transactionDate: -1 });

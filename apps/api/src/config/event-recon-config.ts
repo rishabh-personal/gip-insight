@@ -65,6 +65,7 @@ export interface EventSourceConfig {
 
 /** Default event code used when no eventCode is provided to sync-gap endpoints. */
 export const DEFAULT_INVOICE_EVENT_CODE = 'zpos-inventory.invoice.created';
+export const DEFAULT_APPROVAL_REQUEST_EVENT_CODE = 'pos-core.approval-request.created';
 
 /**
  * Keyed by EventCatalog.eventCode (exact string match).
@@ -99,7 +100,7 @@ export const EVENT_SOURCE_CONFIGS: Record<string, EventSourceConfig> = {
   // ── Add more entries here ────────────────────────────────────────────────
 
  
-    'pos-core.approval-request.created': {
+    [DEFAULT_APPROVAL_REQUEST_EVENT_CODE]: {
     label: 'Approval Request',
     tableName: 'approval_workflow_requests',
     refDocField: 'ulid',
