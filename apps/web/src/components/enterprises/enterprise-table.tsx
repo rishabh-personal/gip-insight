@@ -160,7 +160,7 @@ function EnterpriseCard({
       ) : (
         <div className="grid grid-cols-4 gap-2 text-center">
           <div>
-            <p className="text-[10px] text-gray-400 mb-0.5">Invoices</p>
+            <p className="text-[10px] text-gray-400 mb-0.5">Transactions</p>
             <p className="text-sm font-semibold text-gray-700">{m?.zwing_invoices ?? '—'}</p>
           </div>
           <div>
@@ -344,7 +344,7 @@ export function EnterpriseTable({
               <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide w-8"></th>
               <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide">Enterprise</th>
               <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide hidden lg:table-cell">Apps</th>
-              <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide hidden md:table-cell">Invoices</th>
+              <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide hidden md:table-cell">Transactions Created</th>
               <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide hidden md:table-cell">Processed</th>
               <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide hidden lg:table-cell">Pending</th>
               <th className="text-right px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wide hidden lg:table-cell">Not Captured</th>

@@ -19,10 +19,11 @@ export interface ZwingJobStatusResult {
     hasAnyFailed: boolean;
     hasPendingOnly: boolean;
   }>;
-  /** per (invoice, connector) pair — for detailed / drill-down views */
+  /** per (invoice, connector, event) triple — for detailed / drill-down views */
   byPair: Array<{
     refDocNo: string;
     connectorId: unknown;
+    connectorAppEventId: unknown;
     hasSuccess: boolean;
     hasFailed: boolean;
     hasPendingOnly: boolean;
@@ -85,16 +86,27 @@ export class ZwingStatusService {
     const invoiceIds = rows.map((r) => String(r.invoice_id));
     if (!invoiceIds.length) return empty;
 
+    const connectorScoped = !!(connectorIds && connectorIds.length > 0);
+
+    // ── MongoDB match strategy ────────────────────────────────────────────────
+    // Connector-scoped: query by connectorId + date range — MongoDB can use a
+    // tight { connectorId, transactionDate } IXSCAN, far faster than a multi-
+    // value refDocNo $in scan over potentially 50k+ IDs. Invoice IDs are filtered
+    // in memory after the aggregation.
+    //
+    // All-connectors: refDocNo $in is the only way to scope to source records
+    // (no connector filter available).
     const jobMatch: Record<string, any> = {
       ssoEnterpriseId,
-      refDocNo: { $in: invoiceIds },
-      // No upper bound: capture retriggered / delayed deliveries that land after
-      // the Zwing window closes. Invoice set is already bounded by the MySQL query.
+      // No upper bound on transactionDate: capture retriggered / delayed
+      // deliveries that land after the Zwing window closes. The invoice set
+      // is already bounded by the MySQL created_at BETWEEN clause above.
       transactionDate: { $gte: from },
     };
-    // Connector-tab mode: scope jobs to the selected connector(s) only.
-    if (connectorIds && connectorIds.length > 0) {
-      jobMatch.connectorId = { $in: connectorIds.map((id) => new Types.ObjectId(id)) };
+    if (connectorScoped) {
+      jobMatch.connectorId = { $in: connectorIds!.map((id) => new Types.ObjectId(id)) };
+    } else {
+      jobMatch.refDocNo = { $in: invoiceIds };
     }
 
     // A job that exceeded maxRetry can get stuck in 'processing' state if the
@@ -129,22 +141,36 @@ export class ZwingStatusService {
       },
     };
 
-    const jobGroups = await this.jobModel.aggregate([
+    // $sort is intentionally removed — it was O(n log n) on all matched docs.
+    // latestDate uses $max (accurate). latestError / latestJobId use $last
+    // (arbitrary doc within group — acceptable for deep-link purposes).
+    const allJobGroups = await this.jobModel.aggregate([
       { $match: jobMatch },
-      { $sort: { transactionDate: -1 } },
       {
         $group: {
-          _id:            { refDocNo: '$refDocNo', connectorId: '$connectorId' },
+          // Group at the event level (connectorAppEventId) so that different events
+          // on the same connector are tracked independently. Without this, Event A
+          // (succeeded) and Event B (pending) on the same connector would be merged
+          // into one group and Event A's success would silence Event B's pending state.
+          _id:            { refDocNo: '$refDocNo', connectorId: '$connectorId', connectorAppEventId: '$connectorAppEventId' },
           hasSuccess:     { $max: { $cond: [{ $eq: ['$status', 'success'] }, 1, 0] } },
           hasFailed:      hasFailedExpr,
           hasPending:     { $max: { $cond: [{ $in: ['$status', ['pending', 'processing']] }, 1, 0] } },
-          latestError:    { $first: '$error' },
-          latestDate:     { $first: '$transactionDate' },
+          latestError:    { $last: '$error' },
+          latestDate:     { $max: '$transactionDate' },
           failedAttempts: { $sum: { $cond: [{ $eq: ['$status', 'failed'] }, 1, 0] } },
-          latestJobId:    { $first: '$_id' },
+          latestJobId:    { $last: '$_id' },
         },
       },
     ]);
+
+    // Connector-scoped path: post-filter to only invoice-relevant job groups.
+    // The MongoDB query was intentionally broad (connectorId + date) to avoid
+    // a huge refDocNo $in, so groups for non-invoice events may be included.
+    const invoiceIdsSet = connectorScoped ? new Set(invoiceIds) : null;
+    const jobGroups = invoiceIdsSet
+      ? allJobGroups.filter((g) => invoiceIdsSet.has(g._id.refDocNo))
+      : allJobGroups;
 
     // Roll up to invoice level across all connectors
     const byInvoice = new Map<string, {
@@ -153,33 +179,49 @@ export class ZwingStatusService {
     for (const id of invoiceIds) {
       byInvoice.set(id, { hasSuccess: false, hasAnyJob: false, hasAnyFailed: false, hasPendingOnly: false });
     }
+
+    // Track invoices that have at least one event-group that is purely pending
+    // (no failure AND no success on that specific event group). Since groups are
+    // now at the event level, Event A (succeeded) and Event B (pending) are
+    // separate entries, so Event A's success no longer silences Event B's pending.
+    // Guard: !g.hasSuccess ensures that a group with retries that eventually
+    // succeeded (hasSuccess=1 AND hasPending=1) does NOT appear as pending.
+    const hasPendingGroupIds = new Set<string>();
+
     for (const g of jobGroups) {
       const inv = byInvoice.get(g._id.refDocNo);
       if (!inv) continue;
       inv.hasAnyJob = true;
       if (g.hasSuccess) inv.hasSuccess = true;
-      // hasFailed on pair = failed attempts AND no success for this connector
       if (g.hasFailed && !g.hasSuccess) inv.hasAnyFailed = true;
+      if (g.hasPending && !g.hasFailed && !g.hasSuccess) hasPendingGroupIds.add(g._id.refDocNo);
     }
-    // hasPendingOnly: jobs exist but none succeeded and none have ever failed (purely in-flight)
-    for (const [, inv] of byInvoice) {
-      inv.hasPendingOnly = inv.hasAnyJob && !inv.hasSuccess && !inv.hasAnyFailed;
+
+    // hasPendingOnly: any event-group for this invoice is purely in-flight.
+    // A different event having succeeded does NOT disqualify this — the invoice
+    // still has unfinished work.
+    for (const [id, inv] of byInvoice) {
+      inv.hasPendingOnly = inv.hasAnyJob && !inv.hasAnyFailed && hasPendingGroupIds.has(id);
     }
 
     const byPair = jobGroups.map((g) => {
       const purelyFailed = !!g.hasFailed && !g.hasSuccess;
-      // pendingOnly = jobs exist, no success yet, and NO failure ever — purely in-flight
-      const pendingOnly  = !g.hasSuccess && !g.hasFailed;
+      // pendingOnly: this event-group has no success yet and no failures.
+      // Because grouping is now per-event, this correctly fires for Event B
+      // (pending) while NOT firing for Event A (succeeded, even if it had
+      // earlier pending retries, because g.hasSuccess=1 guards it).
+      const pendingOnly = !g.hasSuccess && !g.hasFailed;
       return {
-        refDocNo:       g._id.refDocNo,
-        connectorId:    g._id.connectorId,
-        hasSuccess:     !!g.hasSuccess,
-        hasFailed:      purelyFailed,
-        hasPendingOnly: pendingOnly,
-        latestError:    g.latestError,
-        latestDate:     g.latestDate,
-        failedAttempts: g.failedAttempts,
-        latestJobId:    g.latestJobId,
+        refDocNo:            g._id.refDocNo,
+        connectorId:         g._id.connectorId,
+        connectorAppEventId: g._id.connectorAppEventId,
+        hasSuccess:          !!g.hasSuccess,
+        hasFailed:           purelyFailed,
+        hasPendingOnly:      pendingOnly,
+        latestError:         g.latestError,
+        latestDate:          g.latestDate,
+        failedAttempts:      g.failedAttempts,
+        latestJobId:         g.latestJobId,
       };
     });
 

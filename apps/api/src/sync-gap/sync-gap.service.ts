@@ -3,6 +3,9 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { DipJob } from '../schemas/dip-job.schema';
 import { Enterprise } from '../schemas/enterprise.schema';
+import { Connector } from '../schemas/connector.schema';
+import { ConnectorEventMapping } from '../schemas/connector-event-mapping.schema';
+import { EventCatalog } from '../schemas/event-catalog.schema';
 import { MysqlTenantService } from '../database/mysql-tenant.service';
 import { ZwingStatusService, errMsg } from '../common/zwing-status.service';
 import {
@@ -16,13 +19,60 @@ export class SyncGapService {
   private readonly logger = new Logger(SyncGapService.name);
 
   constructor(
-    @InjectModel(DipJob.name) private jobModel: Model<DipJob>,
-    @InjectModel(Enterprise.name) private enterpriseModel: Model<Enterprise>,
+    @InjectModel(DipJob.name)                private jobModel: Model<DipJob>,
+    @InjectModel(Enterprise.name)            private enterpriseModel: Model<Enterprise>,
+    @InjectModel(Connector.name)             private connectorModel: Model<Connector>,
+    @InjectModel(ConnectorEventMapping.name) private cemModel: Model<ConnectorEventMapping>,
+    @InjectModel(EventCatalog.name)          private eventModel: Model<EventCatalog>,
     private readonly mysql: MysqlTenantService,
     private readonly zwingStatus: ZwingStatusService,
   ) {}
 
   // ─── Internal helpers ──────────────────────────────────────────────────────
+
+  /**
+   * Returns the ConnectorEventMapping ObjectIds that correspond to the given
+   * eventCode for this enterprise (and optionally a single connector).
+   *
+   * Used to scope GIP job queries to the correct event type so that jobs from
+   * a different event on the same connector (e.g. Event A succeeded) do not
+   * bleed into Event B's status metrics.
+   *
+   * Returns null when the lookup fails — callers fall back to unscoped queries.
+   */
+  private async resolveCemObjectIds(
+    ssoEnterpriseId: string,
+    eventCode: string,
+    connectorId?: string,
+  ): Promise<Types.ObjectId[] | null> {
+    try {
+      const eventDocs = await this.eventModel
+        .find({ eventCode })
+        .select('_id')
+        .lean();
+      if (!eventDocs.length) return null;
+
+      const cemFilter: Record<string, any> = {
+        outboundEventId: { $in: eventDocs.map((e) => e._id) },
+      };
+
+      if (connectorId) {
+        cemFilter.connectorId = new Types.ObjectId(connectorId);
+      } else {
+        const connectorDocs = await this.connectorModel
+          .find({ ssoEnterpriseId })
+          .select('_id')
+          .lean();
+        if (!connectorDocs.length) return [];
+        cemFilter.connectorId = { $in: connectorDocs.map((c) => c._id) };
+      }
+
+      const cemDocs = await this.cemModel.find(cemFilter).select('_id').lean();
+      return cemDocs.map((c) => c._id as Types.ObjectId);
+    } catch {
+      return null;
+    }
+  }
 
   /**
    * Resolves the Zwing db_name for an enterprise from the master vendor table.
@@ -229,13 +279,23 @@ export class SyncGapService {
       }));
 
     // ── Pass 2: GIP-first supplemental ────────────────────────────────────
-    // Find pending/processing GIP jobs by transactionDate. This catches jobs
-    // whose Zwing created_at is outside the MySQL window (e.g. retriggered
-    // events) that Pass 1 would miss entirely.
+    // Find pending/processing GIP jobs that Pass 1 missed. Two scenarios:
+    //   A) Retriggered jobs — Zwing created_at is outside the MySQL window but
+    //      a newer GIP job exists inside it (original intent).
+    //   B) Long-stuck jobs — the GIP job was created before the selected window
+    //      and has been pending ever since (e.g. a May 27 job still pending on
+    //      June 8 is invisible to Pass 1 which only queries the June 8 MySQL window,
+    //      AND was previously invisible to Pass 2 because $gte: from excluded it).
+    //
+    // Fix: remove the $gte lower bound so long-stuck pending jobs are always
+    // surfaced regardless of when they were originally created. The success guard
+    // below already excludes invoices that were later delivered successfully, so
+    // dropping the lower bound is safe. The $lte: to upper bound prevents showing
+    // jobs from future date windows.
     const gipDirectFilter: Record<string, any> = {
       ssoEnterpriseId,
       status: { $in: ['pending', 'processing'] },
-      transactionDate: { $gte: from, $lte: to },
+      transactionDate: { $lte: to },
     };
     if (opts.connectorId) gipDirectFilter.connectorId = new Types.ObjectId(opts.connectorId);
 
@@ -372,12 +432,15 @@ export class SyncGapService {
       storeId: opts.storeId,
     });
 
-    const sourceRows = await this.mysql
-      .query(dbName, sql, params)
-      .catch((e) => {
-        this.logger.warn(`[getSyncGap] Source query failed for db "${dbName}": ${errMsg(e)}`);
-        return [] as any[];
-      }) as any[];
+    const [sourceRows, cemObjectIds] = await Promise.all([
+      this.mysql
+        .query(dbName, sql, params)
+        .catch((e) => {
+          this.logger.warn(`[getSyncGap] Source query failed for db "${dbName}": ${errMsg(e)}`);
+          return [] as any[];
+        }) as Promise<any[]>,
+      this.resolveCemObjectIds(ssoEnterpriseId, eventCode, opts.connectorId),
+    ]);
 
     const refDocField = sourceConfig.refDocField;
 
@@ -387,13 +450,11 @@ export class SyncGapService {
 
     // Query GIP with NO date filter.
     // The source window is already bounded by the MySQL BETWEEN clause above.
-    // Adding a transactionDate filter here would falsely report invoices as
-    // missed when GIP processed the event outside the queried window
-    // (e.g. a Debezium event received a day late, or after a manual retrigger).
-    // When connectorId is provided, restrict to that connector so that missing/
-    // failed counts reflect only this connector's delivery pipeline.
+    // Scope to the event's CEMs so that a different event on the same connector
+    // (e.g. Event A succeeded) does not mark Event B's invoice as captured.
     const gipJobFilter: Record<string, any> = { ssoEnterpriseId, refDocNo: { $in: sourceIds } };
     if (opts.connectorId) gipJobFilter.connectorId = new Types.ObjectId(opts.connectorId);
+    if (cemObjectIds) gipJobFilter.connectorAppEventId = { $in: cemObjectIds };
 
     const gipJobs = sourceIds.length
       ? await this.jobModel
@@ -646,18 +707,21 @@ export class SyncGapService {
 
     const extra = { transactionType: opts.transactionType, storeId: opts.storeId };
 
-    // ── 1. Fetch source rows ────────────────────────────────────────────────
+    // ── 1. Fetch source rows + CEM IDs in parallel ──────────────────────────
     const { sql, params } = this.buildSourceQuery(sourceConfig, from, to, {
       ...extra,
       orderBy: `${sourceConfig.dateField} DESC`,
     });
 
-    const sourceRows = await this.mysql
-      .query(dbName, sql, params)
-      .catch((e) => {
-        this.logger.warn(`[getInvoiceTimeline] Source query failed for db "${dbName}": ${errMsg(e)}`);
-        return [] as any[];
-      }) as any[];
+    const [sourceRows, cemObjectIds] = await Promise.all([
+      this.mysql
+        .query(dbName, sql, params)
+        .catch((e) => {
+          this.logger.warn(`[getInvoiceTimeline] Source query failed for db "${dbName}": ${errMsg(e)}`);
+          return [] as any[];
+        }) as Promise<any[]>,
+      this.resolveCemObjectIds(ssoEnterpriseId, eventCode, opts.connectorId),
+    ]);
 
     if (!sourceRows.length) {
       return {
@@ -676,14 +740,13 @@ export class SyncGapService {
     const allIds = sourceRows.map((r) => String(r[refDocField]));
 
     // ── 2. Fetch GIP jobs for these IDs ─────────────────────────────────────
-    // timestamps array holds per-attempt status + timestamp entries.
-    // We need the earliest 'success' entry to compute the real sync time.
-    // When connectorId is supplied, restrict to that connector so that status
-    // and delay reflect only this connector's delivery pipeline.
+    // Scope to the event's CEMs so that a different event on the same connector
+    // (e.g. Event A succeeded) does not mark Event B's invoice as captured.
     const gipJobFilter: Record<string, any> = { ssoEnterpriseId, refDocNo: { $in: allIds } };
     if (opts.connectorId) {
       gipJobFilter.connectorId = new Types.ObjectId(opts.connectorId);
     }
+    if (cemObjectIds) gipJobFilter.connectorAppEventId = { $in: cemObjectIds };
 
     const gipJobs = await this.jobModel
       .find(gipJobFilter)
