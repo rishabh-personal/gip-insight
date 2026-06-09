@@ -66,6 +66,7 @@ export interface EventSourceConfig {
 /** Default event code used when no eventCode is provided to sync-gap endpoints. */
 export const DEFAULT_INVOICE_EVENT_CODE = 'zpos-inventory.invoice.created';
 export const DEFAULT_APPROVAL_REQUEST_EVENT_CODE = 'pos-core.approval-request.created';
+export const DEFAULT_ORDER_CREATED_EVENT = 'zpos-core.order.created';
 
 /**
  * Keyed by EventCatalog.eventCode (exact string match).
@@ -83,6 +84,20 @@ export const EVENT_SOURCE_CONFIGS: Record<string, EventSourceConfig> = {
       'store_id',
       'transaction_type',
       'transaction_sub_type',
+      'status',
+      'created_at',
+    ],
+  },
+
+  [DEFAULT_ORDER_CREATED_EVENT]: {
+    label: 'Orders',
+    tableName: 'orders',
+    refDocField: 'order_id',
+    dateField: 'created_at',
+    extraWhere: "transaction_sub_type='order' AND status!='cancel' AND status!='PROCESS'",
+    selectFields: [
+      'order_id',
+      'store_id',
       'status',
       'created_at',
     ],
