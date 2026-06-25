@@ -233,7 +233,7 @@ export class SyncGapService {
     // ── Pass 1: MySQL-first ────────────────────────────────────────────────
     const { sql, params } = this.buildSourceQuery(sourceConfig, from, to);
 
-    const [sourceRows, statusResult] = await Promise.all([
+    const [sourceRows, statusResult, cemObjectIds] = await Promise.all([
       this.mysql
         .query(dbName, sql, params)
         .catch((e) => {
@@ -241,28 +241,42 @@ export class SyncGapService {
           return [] as any[];
         }),
       this.zwingStatus.buildZwingJobStatus(ssoEnterpriseId, dbName, from, to),
+      this.resolveCemObjectIds(ssoEnterpriseId, eventCode, opts.connectorId),
     ]);
 
     const { byInvoice, byPair } = statusResult;
 
-    // hasPendingOnly: jobs exist, no success, and no failure ever — purely in-flight.
-    // When scoped to a connector, derive pending state from that connector's byPair
-    // entries only, so invoices delivered by another connector are not excluded.
+    // Pre-compute a string set from cemObjectIds for fast O(1) pair-level filtering.
+    // null means the CEM lookup failed — fall back to unscoped behaviour.
+    const cemIdSet = cemObjectIds ? new Set(cemObjectIds.map((c) => c.toString())) : null;
+
+    // Connector-scoped: filter byPair by connector AND by the event's CEMs so that
+    // pending jobs from a different event type on the same connector don't bleed in.
+    // An invoice delivered by a *different* connector is still surfaced because we
+    // check hasPendingOnly at the pair level (not the invoice level).
+    //
+    // All-connectors: require !v.hasSuccess so that an invoice already delivered by
+    // any connector is excluded — matches Pass 2 success guard and connector-logs.
     const pendingIds = opts.connectorId
       ? new Set(
           byPair
-            .filter((p) => p.connectorId?.toString() === opts.connectorId && p.hasPendingOnly)
+            .filter((p) =>
+              p.connectorId?.toString() === opts.connectorId &&
+              p.hasPendingOnly &&
+              (!cemIdSet || cemIdSet.has((p.connectorAppEventId as any)?.toString())),
+            )
             .map((p) => p.refDocNo),
         )
       : new Set(
           [...byInvoice.entries()]
-            .filter(([, v]) => v.hasPendingOnly)
+            .filter(([, v]) => v.hasPendingOnly && !v.hasSuccess)
             .map(([id]) => id),
         );
 
     const jobInfoMap = new Map<string, { latestDate: Date; latestJobId: unknown }>();
     for (const p of byPair) {
       if (opts.connectorId && p.connectorId?.toString() !== opts.connectorId) continue;
+      if (cemIdSet && !cemIdSet.has((p.connectorAppEventId as any)?.toString())) continue;
       if (!p.hasPendingOnly || !pendingIds.has(p.refDocNo)) continue;
       const existing = jobInfoMap.get(p.refDocNo);
       if (!existing || (p.latestDate && p.latestDate > existing.latestDate)) {
@@ -279,25 +293,22 @@ export class SyncGapService {
       }));
 
     // ── Pass 2: GIP-first supplemental ────────────────────────────────────
-    // Find pending/processing GIP jobs that Pass 1 missed. Two scenarios:
-    //   A) Retriggered jobs — Zwing created_at is outside the MySQL window but
-    //      a newer GIP job exists inside it (original intent).
-    //   B) Long-stuck jobs — the GIP job was created before the selected window
-    //      and has been pending ever since (e.g. a May 27 job still pending on
-    //      June 8 is invisible to Pass 1 which only queries the June 8 MySQL window,
-    //      AND was previously invisible to Pass 2 because $gte: from excluded it).
+    // Catches pending/processing GIP jobs whose Zwing source record falls
+    // outside the MySQL date window but whose GIP transactionDate is within it.
+    // Primary case: retriggered invoices — the Zwing created_at predates the
+    // window, but a new GIP job was emitted during it (transactionDate in [from,to]).
     //
-    // Fix: remove the $gte lower bound so long-stuck pending jobs are always
-    // surfaced regardless of when they were originally created. The success guard
-    // below already excludes invoices that were later delivered successfully, so
-    // dropping the lower bound is safe. The $lte: to upper bound prevents showing
-    // jobs from future date windows.
+    // Both bounds are kept deliberately to match connector-logs pending behaviour:
+    // a job created in January with transactionDate=January belongs in the
+    // January view, not in a June window view. The success guard below already
+    // removes any invoice that succeeded for this event+connector.
     const gipDirectFilter: Record<string, any> = {
       ssoEnterpriseId,
       status: { $in: ['pending', 'processing'] },
-      transactionDate: { $lte: to },
+      transactionDate: { $gte: from, $lte: to },
     };
     if (opts.connectorId) gipDirectFilter.connectorId = new Types.ObjectId(opts.connectorId);
+    if (cemObjectIds) gipDirectFilter.connectorAppEventId = { $in: cemObjectIds };
 
     const gipDirectJobs = await this.jobModel
       .find(gipDirectFilter)
@@ -316,11 +327,19 @@ export class SyncGapService {
 
     if (candidateIds.length) {
       // ── Success guard ────────────────────────────────────────────────────
-      // Exclude any refDocNo that already has a success job in GIP (any date).
-      // Without this, invoices delivered via a later retrigger would still
-      // appear here because an older pending attempt falls in the date window.
+      // Exclude refDocNos that already have a success job for THIS specific
+      // event+connector combination. Scoping to cemObjectIds/connectorId ensures
+      // that a success from a completely different event (e.g. approval-request)
+      // does not hide a genuine invoice-created pending job, and vice-versa.
+      const successFilter: Record<string, any> = {
+        ssoEnterpriseId,
+        refDocNo: { $in: candidateIds },
+        status: 'success',
+      };
+      if (cemObjectIds) successFilter.connectorAppEventId = { $in: cemObjectIds };
+      if (opts.connectorId) successFilter.connectorId = new Types.ObjectId(opts.connectorId);
       const successDocs = await this.jobModel
-        .find({ ssoEnterpriseId, refDocNo: { $in: candidateIds }, status: 'success' })
+        .find(successFilter)
         .select('refDocNo')
         .lean()
         .catch(() => []);
@@ -349,7 +368,7 @@ export class SyncGapService {
           if (!extraIds.includes(job.refDocNo)) continue;
           const existing = extraJobMap.get(job.refDocNo);
           const jobDate: Date | null = (job as any).updatedAt ?? null;
-          if (!existing || (jobDate && existing.latestDate && jobDate > existing.latestDate)) {
+          if (!existing || (jobDate && (!existing.latestDate || jobDate > existing.latestDate))) {
             extraJobMap.set(job.refDocNo, { latestDate: jobDate, latestJobId: (job as any)._id?.toString() ?? null });
           }
         }
