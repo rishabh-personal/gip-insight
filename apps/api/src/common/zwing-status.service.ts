@@ -3,6 +3,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { DipJob } from '../schemas/dip-job.schema';
 import { MysqlTenantService } from '../database/mysql-tenant.service';
+import { EVENT_SOURCE_CONFIGS, DEFAULT_INVOICE_EVENT_CODE } from '../config/event-recon-config';
 
 export interface ZwingJobStatusResult {
   invoiceIds: string[];
@@ -68,12 +69,17 @@ export class ZwingStatusService {
   ): Promise<ZwingJobStatusResult> {
     const empty: ZwingJobStatusResult = { invoiceIds: [], byInvoice: new Map(), byPair: [] };
 
+    // Source table / columns are driven by EVENT_SOURCE_CONFIGS — no event
+    // type is hardcoded here, matching sync-gap.service.ts / enterprises.service.ts.
+    const invoiceConfig = EVENT_SOURCE_CONFIGS[DEFAULT_INVOICE_EVENT_CODE];
+    let where = `${invoiceConfig.dateField} BETWEEN ? AND ?`;
+    if (invoiceConfig.extraWhere) where += ` AND ${invoiceConfig.extraWhere}`;
+
     let rows: { invoice_id: string | number }[];
     try {
       rows = await this.mysql.query<{ invoice_id: string | number }>(
         dbName,
-        `SELECT invoice_id FROM invoices
-         WHERE created_at BETWEEN ? AND ? AND channel_id != 3 AND status = 'SUCCESS'`,
+        `SELECT \`${invoiceConfig.refDocField}\` AS invoice_id FROM \`${invoiceConfig.tableName}\` WHERE ${where}`,
         [from, to],
       );
     } catch (e) {
@@ -100,7 +106,7 @@ export class ZwingStatusService {
       ssoEnterpriseId,
       // No upper bound on transactionDate: capture retriggered / delayed
       // deliveries that land after the Zwing window closes. The invoice set
-      // is already bounded by the MySQL created_at BETWEEN clause above.
+      // is already bounded by the MySQL dateField BETWEEN clause above.
       transactionDate: { $gte: from },
     };
     if (connectorScoped) {
