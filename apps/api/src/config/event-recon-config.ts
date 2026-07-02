@@ -77,7 +77,7 @@ export const EVENT_SOURCE_CONFIGS: Record<string, EventSourceConfig> = {
     label: 'Invoices',
     tableName: 'invoices',
     refDocField: 'invoice_id',
-    dateField: 'created_at',
+    dateField: 'date',
     extraWhere: "channel_id != 3 AND status = 'SUCCESS'",
     selectFields: [
       'invoice_id',
@@ -85,7 +85,7 @@ export const EVENT_SOURCE_CONFIGS: Record<string, EventSourceConfig> = {
       'transaction_type',
       'transaction_sub_type',
       'status',
-      'created_at',
+      'date',
     ],
   },
 
