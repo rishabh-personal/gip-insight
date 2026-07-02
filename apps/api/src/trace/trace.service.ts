@@ -9,6 +9,7 @@ import { AppCatalog } from '../schemas/app-catalog.schema';
 import { ConnectorEventMapping } from '../schemas/connector-event-mapping.schema';
 import { EventCatalog } from '../schemas/event-catalog.schema';
 import { MysqlTenantService } from '../database/mysql-tenant.service';
+import { EVENT_SOURCE_CONFIGS, DEFAULT_INVOICE_EVENT_CODE } from '../config/event-recon-config';
 
 @Injectable()
 export class TraceService {
@@ -59,11 +60,15 @@ export class TraceService {
           );
           const dbName = (vendors[0] as any)?.db_name;
           if (!dbName) return null;
+          // Table / lookup column come from EVENT_SOURCE_CONFIGS (single source of
+          // truth). The extra display columns below aren't part of the shared
+          // selectFields since this trace view needs more detail than recon does.
+          const invoiceConfig = EVENT_SOURCE_CONFIGS[DEFAULT_INVOICE_EVENT_CODE];
           const invoices = await this.mysql.query(
             dbName,
-            `SELECT id, invoice_id, store_id, v_id, status, transaction_type, transaction_sub_type,
+            `SELECT id, \`${invoiceConfig.refDocField}\`, store_id, v_id, status, transaction_type, transaction_sub_type,
                     total, created_at, updated_at, sync_status
-             FROM invoices WHERE invoice_id = ? LIMIT 1`,
+             FROM \`${invoiceConfig.tableName}\` WHERE \`${invoiceConfig.refDocField}\` = ? LIMIT 1`,
             [invoiceId],
           );
           return invoices[0] ? { eid, row: invoices[0] } : null;
