@@ -6,6 +6,7 @@ import { MysqlTenantService } from '../database/mysql-tenant.service';
 import { EVENT_SOURCE_CONFIGS, DEFAULT_INVOICE_EVENT_CODE } from '../config/event-recon-config';
 
 export interface ZwingJobStatusResult {
+  /** Source record IDs from the configured MySQL table (invoice_id, order_id, etc — generic despite the name). */
   invoiceIds: string[];
   /**
    * Per-invoice rollup across all connectors:
@@ -52,12 +53,15 @@ export class ZwingStatusService {
   /**
    * The single source of truth for all failure / success metrics.
    *
-   * 1. Fetches invoice IDs from Zwing MySQL for the given date window.
-   * 2. Queries GIP MongoDB for jobs with refDocNo IN (invoiceIds) and
+   * 1. Fetches source record IDs from Zwing MySQL for the given date window,
+   *    using the table/columns configured in EVENT_SOURCE_CONFIGS for the
+   *    given eventCode (defaults to the invoice event when omitted, which is
+   *    what most callers — enterprise-wide dashboards — want).
+   * 2. Queries GIP MongoDB for jobs with refDocNo IN (sourceIds) and
    *    transactionDate >= from (no upper bound — catches retriggered jobs
    *    whose success landed after the original window closes).
    * 3. Groups by (refDocNo, connectorId) and determines pass / fail / missing
-   *    at the invoice level — regardless of how many job attempts were made.
+   *    at the record level — regardless of how many job attempts were made.
    */
   async buildZwingJobStatus(
     ssoEnterpriseId: string,
@@ -66,25 +70,27 @@ export class ZwingStatusService {
     to: Date,
     /** When set, only jobs for these connector IDs are included (connector-tab mode). */
     connectorIds?: string[],
+    /** Event whose EVENT_SOURCE_CONFIGS entry drives the source table/columns. Defaults to the invoice event. */
+    eventCode: string = DEFAULT_INVOICE_EVENT_CODE,
   ): Promise<ZwingJobStatusResult> {
     const empty: ZwingJobStatusResult = { invoiceIds: [], byInvoice: new Map(), byPair: [] };
 
     // Source table / columns are driven by EVENT_SOURCE_CONFIGS — no event
     // type is hardcoded here, matching sync-gap.service.ts / enterprises.service.ts.
-    const invoiceConfig = EVENT_SOURCE_CONFIGS[DEFAULT_INVOICE_EVENT_CODE];
-    let where = `${invoiceConfig.dateField} BETWEEN ? AND ?`;
-    if (invoiceConfig.extraWhere) where += ` AND ${invoiceConfig.extraWhere}`;
+    const sourceConfig = EVENT_SOURCE_CONFIGS[eventCode] ?? EVENT_SOURCE_CONFIGS[DEFAULT_INVOICE_EVENT_CODE];
+    let where = `${sourceConfig.dateField} BETWEEN ? AND ?`;
+    if (sourceConfig.extraWhere) where += ` AND ${sourceConfig.extraWhere}`;
 
     let rows: { invoice_id: string | number }[];
     try {
       rows = await this.mysql.query<{ invoice_id: string | number }>(
         dbName,
-        `SELECT \`${invoiceConfig.refDocField}\` AS invoice_id FROM \`${invoiceConfig.tableName}\` WHERE ${where}`,
+        `SELECT \`${sourceConfig.refDocField}\` AS invoice_id FROM \`${sourceConfig.tableName}\` WHERE ${where}`,
         [from, to],
       );
     } catch (e) {
       this.logger.warn(
-        `[buildZwingJobStatus] MySQL query failed for db "${dbName}": ${errMsg(e)}`,
+        `[buildZwingJobStatus] MySQL query failed for db "${dbName}" (event "${eventCode}"): ${errMsg(e)}`,
       );
       return empty;
     }

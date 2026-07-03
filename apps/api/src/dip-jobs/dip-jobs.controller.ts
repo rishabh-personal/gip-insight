@@ -57,11 +57,13 @@ export class DipJobsController {
   @ApiOperation({ summary: 'All / success / failed jobs for an enterprise+connector (connector log view)' })
   @ApiQuery({ name: 'status', required: false, description: 'all | success | failed | pending (default: all)' })
   @ApiQuery({ name: 'connectorId', required: false })
+  @ApiQuery({ name: 'eventCode', required: false, description: 'Restrict jobs to a single outbound event — omit to include all events on the connector' })
   @ApiQuery({ name: 'search', required: false, description: 'Filter by refDocNo (invoice number) — case-insensitive substring' })
   async jobsList(
     @Param('ssoEnterpriseId') ssoEnterpriseId: string,
     @Query() pagination: PaginationDto,
     @Query('connectorId') connectorId?: string,
+    @Query('eventCode') eventCode?: string,
     @Query('status') status?: string,
     @Query('search') search?: string,
   ) {
@@ -70,6 +72,7 @@ export class DipJobsController {
     return this.svc.getJobsList({
       ssoEnterpriseId,
       connectorId,
+      eventCode,
       status: resolvedStatus,
       from: pagination.fromDate,
       to: pagination.toDate,
