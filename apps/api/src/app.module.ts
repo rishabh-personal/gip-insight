@@ -53,7 +53,15 @@ const mongoProxyOpts = process.env.MONGO_PROXY_PORT
       socketTimeoutMS: 60000,
     }),
 
-    ThrottlerModule.forRoot([{ ttl: 60000, limit: 120 }]),
+    // This is an internal, authenticated dashboard whose enterprise list page
+    // intentionally fires one metrics request per visible row in parallel
+    // (see EnterpriseTable) — a single page load can easily burst 50-100+
+    // requests. 120/60s was tuned for a "one request per user action" API,
+    // not this fan-out pattern, and (until trust proxy was enabled in
+    // main.ts) was shared by ALL users since every request arrives from the
+    // gip-web container's IP. Raised to give real headroom while still
+    // catching runaway loops/bugs.
+    ThrottlerModule.forRoot([{ ttl: 60000, limit: 600 }]),
     DatabaseModule,
     EnterprisesModule,
     DipJobsModule,
