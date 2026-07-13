@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
 import { getJobDetail, getBlobContent } from '@/lib/api-client';
@@ -157,7 +157,7 @@ function CodeView({ text }: { text: string }) {
       <div className="select-none shrink-0 text-right pr-3 pt-4 pb-4 text-[11px] leading-5 font-mono text-gray-600 border-r border-gray-700 min-w-[2.8rem]">
         {lines.map((_, i) => <div key={i}>{i + 1}</div>)}
       </div>
-      {/* Code */}
+      {/* Code — scrolls independently, always starts at top (fresh mount per blob via key=path) */}
       <pre className="flex-1 overflow-auto p-4 text-[11px] leading-5 font-mono whitespace-pre">
         {highlight(text)}
       </pre>
@@ -333,19 +333,22 @@ function BlobPanel({ path, label }: { path: string; label: string }) {
           </div>
         )}
         {isError && (
-          <div className="flex items-start gap-2 p-4">
+          <div className="h-full overflow-y-auto flex items-start gap-2 p-4">
             <AlertCircle className="w-3.5 h-3.5 text-red-400 shrink-0 mt-0.5" />
-            <div>
+            <div className="min-w-0">
               <p className="text-xs text-red-400 font-medium">Failed to load blob</p>
-              <p className="text-[10px] text-red-500/70 font-mono mt-1 break-all">{(error as any)?.message ?? 'Unknown error'}</p>
+              <p className="text-[10px] text-red-500/70 font-mono mt-1 break-all whitespace-pre-wrap">{(error as any)?.message ?? 'Unknown error'}</p>
             </div>
           </div>
         )}
         {!isLoading && !isError && !text && (
           <p className="p-4 text-xs text-gray-500 italic">Empty or no content at this path.</p>
         )}
-        {!isLoading && !isError && text && viewMode === 'code' && <CodeView text={text} />}
-        {!isLoading && !isError && text && viewMode === 'tree' && canTree && <TreeView data={parsed} />}
+        {/* key={path} forces a fresh mount whenever the blob path changes (new task or
+            new tab), so the viewer always starts scrolled to the top instead of
+            inheriting the previous blob's scroll position. */}
+        {!isLoading && !isError && text && viewMode === 'code' && <CodeView key={path} text={text} />}
+        {!isLoading && !isError && text && viewMode === 'tree' && canTree && <TreeView key={path} data={parsed} />}
       </div>
     </div>
   );
@@ -519,35 +522,41 @@ function TaskSidePanel({ task, onClose }: { task: Task; onClose: () => void }) {
   const c = getColor(task.status);
 
   return (
-    <div className="flex flex-col h-full">
-      {/* Coloured top strip */}
-      <div className={cn('h-1 w-full', c.strip)} />
-
-      {/* Header */}
-      <div className="flex items-start justify-between p-4 border-b border-gray-100">
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <StatusDot status={task.status} />
-            <span className="font-semibold text-gray-900 text-sm truncate">{task.name}</span>
+    // The whole card scrolls as one unit (single scrollbar) — the header below
+    // is sticky so the close button / task name stay reachable while you scroll
+    // through a long error, timeline, or payload.
+    <div className="h-full overflow-y-auto">
+      {/* Coloured strip + header — pinned to the top of the scroll area */}
+      <div className="sticky top-0 z-20 bg-white">
+        <div className={cn('h-1 w-full', c.strip)} />
+        <div className="flex items-start justify-between p-4 border-b border-gray-100">
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2">
+              <StatusDot status={task.status} />
+              <span className="font-semibold text-gray-900 text-sm truncate">{task.name}</span>
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+              <Badge variant={statusVariant[task.status] || 'muted'}>{task.status}</Badge>
+              <TypeBadge type={task.type} />
+              {task.retryCount > 0 && (
+                <span className="text-[10px] text-orange-500 font-medium">↺ retried {task.retryCount}×</span>
+              )}
+            </div>
           </div>
-          <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
-            <Badge variant={statusVariant[task.status] || 'muted'}>{task.status}</Badge>
-            <TypeBadge type={task.type} />
-            {task.retryCount > 0 && (
-              <span className="text-[10px] text-orange-500 font-medium">↺ retried {task.retryCount}×</span>
-            )}
-          </div>
+          <button onClick={onClose} className="text-gray-300 hover:text-gray-500 ml-2 mt-0.5">
+            <X className="w-4 h-4" />
+          </button>
         </div>
-        <button onClick={onClose} className="text-gray-300 hover:text-gray-500 ml-2 mt-0.5">
-          <X className="w-4 h-4" />
-        </button>
       </div>
 
-      {/* Error banner */}
+      {/* Error banner — capped height with its own scroll so one very long error
+          doesn't force excessive scrolling just to reach the tabs below it. */}
       {task.error && (
         <div className="mx-4 mt-3 p-3 bg-red-50 border border-red-200 rounded-lg">
           <p className="text-[10px] font-semibold text-red-400 mb-1 uppercase tracking-wider">Error</p>
-          <p className="text-xs text-red-700 font-mono whitespace-pre-wrap break-all">{task.error}</p>
+          <div className="max-h-40 overflow-y-auto">
+            <p className="text-xs text-red-700 font-mono whitespace-pre-wrap break-all">{task.error}</p>
+          </div>
         </div>
       )}
 
@@ -569,9 +578,9 @@ function TaskSidePanel({ task, onClose }: { task: Task; onClose: () => void }) {
         ))}
       </div>
 
-      {/* Tab content — payload tabs fill remaining height; timeline scrolls normally */}
+      {/* Tab content — part of the same page scroll as everything above. */}
       {activeTab === 'timeline' ? (
-        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+        <div className="p-4 space-y-3">
           <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Status history</p>
           <div className="relative pl-5">
             <div className="absolute left-1.5 top-0 bottom-0 w-px bg-gray-200" />
@@ -606,8 +615,11 @@ function TaskSidePanel({ task, onClose }: { task: Task; onClose: () => void }) {
           )}
         </div>
       ) : (
-        /* Payload tabs — BlobPanel fills the full remaining height */
-        <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+        /* Payload tabs — BlobPanel gets a generous, comfortable-to-read fixed
+           height with its own internal code/tree scroll; if the sticky header +
+           error banner + tabs + this height together exceed the viewport, the
+           outer card scroll (above) takes over so nothing is ever unreachable. */
+        <div className="h-[65vh] flex flex-col overflow-hidden">
           {activeTab === 'input' && (
             task.inputDataPath
               ? <BlobPanel path={task.inputDataPath} label="Request payload" />
@@ -631,9 +643,74 @@ function TaskSidePanel({ task, onClose }: { task: Task; onClose: () => void }) {
 
 // ─── Main view ────────────────────────────────────────────────────────────────
 
+const PANEL_WIDTH_STORAGE_KEY = 'gip-task-panel-width';
+const PANEL_MIN_WIDTH = 360;
+
 export function JobDetailView({ jobId }: { jobId: string }) {
   const router = useRouter();
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+
+  // Draggable width for the task side panel — null means "use the default
+  // 80vw / max-w-3xl CSS sizing"; once the user drags the handle we switch to
+  // an explicit pixel width and remember it for next time.
+  const [panelWidth, setPanelWidth] = useState<number | null>(() => {
+    if (typeof window === 'undefined') return null;
+    const saved = Number(window.localStorage.getItem(PANEL_WIDTH_STORAGE_KEY));
+    return Number.isFinite(saved) && saved > 0 ? saved : null;
+  });
+  const drawerRef = useRef<HTMLDivElement>(null);
+  const dragState = useRef<{ startX: number; startWidth: number } | null>(null);
+  const [isResizing, setIsResizing] = useState(false);
+
+  // window.addEventListener needs the SAME function reference for add + remove.
+  // We keep a stable wrapper (created once) whose `.current` implementation is
+  // refreshed every render, so the listener always runs the latest closure
+  // without us having to re-attach/detach it on every re-render.
+  const resizeMoveImpl = useRef<(e: MouseEvent) => void>(() => {});
+  const resizeEndImpl = useRef<() => void>(() => {});
+
+  resizeMoveImpl.current = (e: MouseEvent) => {
+    if (!dragState.current) return;
+    // Handle sits on the left edge of a right-anchored panel: dragging left
+    // (negative clientX delta) should grow the panel, so we invert the delta.
+    const deltaX = dragState.current.startX - e.clientX;
+    const maxWidth = window.innerWidth * 0.95;
+    const next = Math.min(Math.max(dragState.current.startWidth + deltaX, PANEL_MIN_WIDTH), maxWidth);
+    setPanelWidth(next);
+  };
+
+  resizeEndImpl.current = () => {
+    dragState.current = null;
+    setIsResizing(false);
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    window.removeEventListener('mousemove', stableResizeMove);
+    window.removeEventListener('mouseup', stableResizeEnd);
+    setPanelWidth((w) => {
+      if (w) window.localStorage.setItem(PANEL_WIDTH_STORAGE_KEY, String(w));
+      return w;
+    });
+  };
+
+  const stableResizeMove = useRef((e: MouseEvent) => resizeMoveImpl.current(e)).current;
+  const stableResizeEnd = useRef(() => resizeEndImpl.current()).current;
+
+  // Defensive cleanup if the component unmounts mid-drag.
+  useEffect(() => () => {
+    window.removeEventListener('mousemove', stableResizeMove);
+    window.removeEventListener('mouseup', stableResizeEnd);
+  }, [stableResizeMove, stableResizeEnd]);
+
+  const handleResizeStart = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startWidth = panelWidth ?? drawerRef.current?.getBoundingClientRect().width ?? 720;
+    dragState.current = { startX: e.clientX, startWidth };
+    setIsResizing(true);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    window.addEventListener('mousemove', stableResizeMove);
+    window.addEventListener('mouseup', stableResizeEnd);
+  };
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ['job-detail', jobId],
@@ -760,14 +837,31 @@ export function JobDetailView({ jobId }: { jobId: string }) {
             onClick={() => setSelectedTask(null)}
           />
 
-          {/* Drawer panel — slides in from the right, 80% wide */}
+          {/* Drawer panel — slides in from the right, resizable via the left-edge handle */}
           <div
+            ref={drawerRef}
             className={cn(
-              'fixed inset-y-0 right-0 z-50 w-[80vw] max-w-3xl',
+              'fixed inset-y-0 right-0 z-50',
+              !panelWidth && 'w-[80vw] max-w-3xl',
               'bg-white shadow-2xl flex flex-col',
               'animate-slide-in-right',
             )}
+            style={panelWidth ? { width: panelWidth } : undefined}
           >
+            {/* Drag handle — drag left/right to resize the panel */}
+            <div
+              onMouseDown={handleResizeStart}
+              title="Drag to resize"
+              className={cn(
+                'absolute left-0 top-0 h-full w-1.5 -translate-x-0.5 cursor-col-resize z-10 group',
+                'flex items-center justify-center',
+              )}
+            >
+              <div className={cn(
+                'w-1 h-12 rounded-full transition-colors',
+                isResizing ? 'bg-indigo-500' : 'bg-gray-200 group-hover:bg-indigo-400',
+              )} />
+            </div>
             <TaskSidePanel task={selectedTask} onClose={() => setSelectedTask(null)} />
           </div>
         </>
