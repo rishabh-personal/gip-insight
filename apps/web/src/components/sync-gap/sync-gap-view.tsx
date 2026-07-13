@@ -60,6 +60,7 @@ export function SyncGapView({ ssoEnterpriseId }: { ssoEnterpriseId: string }) {
 
   const connectorId   = searchParams.get('connectorId')   ?? undefined;
   const connectorName = searchParams.get('connectorName') ?? undefined;
+  const eventCode     = searchParams.get('eventCode')     ?? undefined;
 
   const [activeTab, setActiveTab] = useState<TabId>('missing');
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -67,21 +68,32 @@ export function SyncGapView({ ssoEnterpriseId }: { ssoEnterpriseId: string }) {
   const [failedPage, setFailedPage] = useState(1);
 
   const { data, isLoading, isError, refetch, isFetching } = useQuery({
-    queryKey: ['sync-gap', ssoEnterpriseId, from, to, connectorId ?? ''],
-    queryFn: () => getSyncGap(ssoEnterpriseId, { from, to, ...(connectorId ? { connectorId } : {}) }),
+    queryKey: ['sync-gap', ssoEnterpriseId, from, to, connectorId ?? '', eventCode ?? ''],
+    queryFn: () => getSyncGap(ssoEnterpriseId, {
+      from, to,
+      ...(connectorId ? { connectorId } : {}),
+      ...(eventCode   ? { eventCode }   : {}),
+    }),
   });
 
   const { data: pendingData, isLoading: pendingLoading, refetch: pendingRefetch, isFetching: pendingFetching } = useQuery({
-    queryKey: ['pending-invoices', ssoEnterpriseId, from, to, connectorId ?? ''],
-    queryFn: () => getPendingInvoices(ssoEnterpriseId, { from, to, ...(connectorId ? { connectorId } : {}) }),
+    queryKey: ['pending-invoices', ssoEnterpriseId, from, to, connectorId ?? '', eventCode ?? ''],
+    queryFn: () => getPendingInvoices(ssoEnterpriseId, {
+      from, to,
+      ...(connectorId ? { connectorId } : {}),
+      ...(eventCode   ? { eventCode }   : {}),
+    }),
     enabled: activeTab === 'pending',
   });
 
   // Failed tab — same API as connector logs Failed tab for correct zombie detection logic.
   // Always fetched (not gated on activeTab) so the Total Gap stat card is correct from the start.
   const { data: failedJobsData, isLoading: failedLoading, isFetching: failedFetching, refetch: failedRefetch } = useQuery({
-    queryKey: ['sync-gap-failed-jobs', ssoEnterpriseId, connectorId, from, to, failedPage],
-    queryFn: () => getConnectorJobs(ssoEnterpriseId, { status: 'failed', from, to, page: failedPage, limit: FAILED_PAGE_SIZE, connectorId }),
+    queryKey: ['sync-gap-failed-jobs', ssoEnterpriseId, connectorId, eventCode ?? '', from, to, failedPage],
+    queryFn: () => getConnectorJobs(ssoEnterpriseId, {
+      status: 'failed', from, to, page: failedPage, limit: FAILED_PAGE_SIZE, connectorId,
+      ...(eventCode ? { eventCode } : {}),
+    }),
     placeholderData: (prev) => prev,
   });
 

@@ -240,7 +240,11 @@ export class SyncGapService {
           this.logger.warn(`[getPendingInvoices] Source query failed for db "${dbName}": ${errMsg(e)}`);
           return [] as any[];
         }),
-      this.zwingStatus.buildZwingJobStatus(ssoEnterpriseId, dbName, from, to),
+      this.zwingStatus.buildZwingJobStatus(
+        ssoEnterpriseId, dbName, from, to,
+        opts.connectorId ? [opts.connectorId] : undefined,
+        eventCode,
+      ),
       this.resolveCemObjectIds(ssoEnterpriseId, eventCode, opts.connectorId),
     ]);
 
@@ -564,6 +568,9 @@ export class SyncGapService {
       transactionDate: { $gte: from, $lte: to },
     };
     if (opts.connectorId) extraJobFilter.connectorId = new Types.ObjectId(opts.connectorId);
+    // Scope to the event's CEMs — without this, a zombie job from a different
+    // event on the same connector would leak into this event's failed bucket.
+    if (cemObjectIds) extraJobFilter.connectorAppEventId = { $in: cemObjectIds };
 
     const gipExtraJobs = await this.jobModel
       .find(extraJobFilter)
@@ -583,9 +590,19 @@ export class SyncGapService {
       // ── Success guard ────────────────────────────────────────────────────
       // The gipExtraJobs query never fetches success jobs, so hasSuccess would
       // always be false. Explicitly check: if a refDocNo has ANY success job
-      // in GIP it was delivered — exclude it from the failed bucket.
+      // for THIS event (scoped by cemObjectIds, same as gipJobFilter above) it
+      // was delivered — exclude it from the failed bucket. Without the CEM
+      // scope, a success on a different event for the same refDocNo would
+      // incorrectly clear a real failure on this event.
+      const extraSuccessFilter: Record<string, any> = {
+        ssoEnterpriseId,
+        refDocNo: { $in: extraCandidateIds },
+        status: 'success',
+      };
+      if (opts.connectorId) extraSuccessFilter.connectorId = new Types.ObjectId(opts.connectorId);
+      if (cemObjectIds) extraSuccessFilter.connectorAppEventId = { $in: cemObjectIds };
       const extraSuccessDocs = await this.jobModel
-        .find({ ssoEnterpriseId, refDocNo: { $in: extraCandidateIds }, status: 'success' })
+        .find(extraSuccessFilter)
         .select('refDocNo')
         .lean()
         .catch(() => []);

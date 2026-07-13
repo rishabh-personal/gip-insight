@@ -27,6 +27,45 @@ export class DipJobsService {
   // ──────────────────────────────────────────────────────────────────────────
 
   /**
+   * Returns the ConnectorEventMapping ObjectIds for a given eventCode (and
+   * optionally a single connector) — used to scope job queries to one event
+   * so that jobs from a different event on the same connector don't bleed in.
+   * Mirrors SyncGapService.resolveCemObjectIds. Returns null on lookup failure
+   * (callers should fall back to unscoped behaviour) or when the eventCode
+   * doesn't resolve to any EventCatalog doc.
+   */
+  private async resolveCemObjectIds(
+    ssoEnterpriseId: string,
+    eventCode: string,
+    connectorId?: string,
+  ): Promise<Types.ObjectId[] | null> {
+    try {
+      const eventDocs = await this.eventModel.find({ eventCode }).select('_id').lean();
+      if (!eventDocs.length) return null;
+
+      const cemFilter: Record<string, any> = {
+        outboundEventId: { $in: eventDocs.map((e) => e._id) },
+      };
+
+      if (connectorId) {
+        cemFilter.connectorId = new Types.ObjectId(connectorId);
+      } else {
+        const connectorDocs = await this.connectorModel
+          .find({ ssoEnterpriseId })
+          .select('_id')
+          .lean();
+        if (!connectorDocs.length) return [];
+        cemFilter.connectorId = { $in: connectorDocs.map((c) => c._id) };
+      }
+
+      const cemDocs = await this.cemModel.find(cemFilter).select('_id').lean();
+      return cemDocs.map((c) => c._id as Types.ObjectId);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Returns ssoEnterpriseIds of enterprises that have a private app AND a Zwing VId.
    * Same filter logic as the enterprise list page.
    */
@@ -200,14 +239,22 @@ export class DipJobsService {
     from: Date; to: Date;
     ssoEnterpriseId: string;
     connectorId?: string;
+    eventCode?: string;
     search?: string;
   }): Promise<any> {
     const dbName = await this.zwingStatus.getVendorDbName(opts.ssoEnterpriseId);
     if (!dbName) return { data: [], meta: { total: 0, page: opts.page, limit: opts.limit } };
 
-    const { byInvoice, byPair } = await this.zwingStatus.buildZwingJobStatus(
-      opts.ssoEnterpriseId, dbName, opts.from, opts.to,
-    );
+    const [{ byInvoice, byPair }, cemObjectIds] = await Promise.all([
+      this.zwingStatus.buildZwingJobStatus(
+        opts.ssoEnterpriseId, dbName, opts.from, opts.to,
+        opts.connectorId ? [opts.connectorId] : undefined,
+        opts.eventCode,
+      ),
+      opts.eventCode
+        ? this.resolveCemObjectIds(opts.ssoEnterpriseId, opts.eventCode, opts.connectorId)
+        : Promise.resolve(null),
+    ]);
 
     // p.hasFailed already means: this connector failed AND never succeeded for this invoice.
     // Do NOT filter by inv.hasSuccess — that would hide a connector failure just because
@@ -218,6 +265,16 @@ export class DipJobsService {
       failedPairs = failedPairs.filter(
         (p) => p.connectorId?.toString() === opts.connectorId,
       );
+    }
+
+    // buildZwingJobStatus now sources its candidate refDocNo set from
+    // EVENT_SOURCE_CONFIGS[opts.eventCode] (falls back to the invoice event),
+    // so this correctly narrows results to the selected event's own table —
+    // not just invoices. The CEM scoping below is an extra guard against
+    // job groups from a different event bleeding in.
+    if (cemObjectIds) {
+      const cemIdSet = new Set(cemObjectIds.map((c) => c.toString()));
+      failedPairs = failedPairs.filter((p) => cemIdSet.has((p.connectorAppEventId as any)?.toString()));
     }
 
     if (opts.search) {
@@ -322,6 +379,7 @@ export class DipJobsService {
   async getJobsList(opts: {
     ssoEnterpriseId: string;
     connectorId?: string;
+    eventCode?: string;
     status: 'all' | 'success' | 'failed' | 'pending';
     from: Date;
     to: Date;
@@ -345,6 +403,12 @@ export class DipJobsService {
     if (opts.status === 'pending') match.status = { $in: ['pending', 'processing'] };
     if (opts.search?.trim()) {
       match.refDocNo = { $regex: opts.search.trim(), $options: 'i' };
+    }
+    if (opts.eventCode) {
+      // outboundEventId is stored directly on the job doc, so we can filter
+      // without going through ConnectorEventMapping.
+      const eventDocs = await this.eventModel.find({ eventCode: opts.eventCode }).select('_id').lean();
+      match.outboundEventId = { $in: eventDocs.map((e) => e._id) };
     }
 
     const skip = (opts.page - 1) * opts.limit;
