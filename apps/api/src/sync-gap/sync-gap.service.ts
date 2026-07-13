@@ -352,12 +352,16 @@ export class SyncGapService {
 
       if (extraIds.length) {
         // Bulk MySQL lookup to enrich extra invoices with source fields.
+        // Must apply the SAME extraWhere as Pass 1 (e.g. "channel_id != 3 AND
+        // status = 'SUCCESS'") — otherwise a GIP job for a row that fails the
+        // business filter (wrong channel, wrong status, etc.) would still leak
+        // into the pending list via this enrichment lookup.
         const placeholders = extraIds.map(() => '?').join(',');
         const columns = sourceConfig.selectFields?.length ? sourceConfig.selectFields.join(', ') : '*';
         const extraRows: any[] = await this.mysql
           .query(
             dbName,
-            `SELECT ${columns} FROM ${sourceConfig.tableName} WHERE ${sourceConfig.refDocField} IN (${placeholders})`,
+            `SELECT ${columns} FROM ${sourceConfig.tableName} WHERE ${sourceConfig.refDocField} IN (${placeholders})${sourceConfig.extraWhere ? ` AND ${sourceConfig.extraWhere}` : ''}`,
             extraIds,
           )
           .catch(() => []);
@@ -378,7 +382,11 @@ export class SyncGapService {
         }
 
         for (const refDocNo of extraIds) {
-          const mysqlRow = mysqlMap.get(refDocNo) ?? { [refDocField]: refDocNo };
+          // No matching row means it either no longer exists in MySQL or (far more
+          // commonly) failed extraWhere — either way it's not a source record we're
+          // reconciling for this event, so skip it rather than showing a bare stub.
+          const mysqlRow = mysqlMap.get(refDocNo);
+          if (!mysqlRow) continue;
           const info = extraJobMap.get(refDocNo);
           pendingInvoices.push({
             ...mysqlRow,
@@ -608,16 +616,21 @@ export class SyncGapService {
         .catch(() => []);
       const extraDeliveredIds = new Set((extraSuccessDocs as any[]).map((j) => j.refDocNo));
       const extraFailedIds = extraCandidateIds.filter((id) => !extraDeliveredIds.has(id));
-      extraFailedCount = extraFailedIds.length;
+      // extraFailedCount is finalised below once we know how many of these
+      // actually passed extraWhere (some may be skipped — see loop below) —
+      // successCount's arithmetic depends on it matching failed.length exactly.
 
       if (extraFailedIds.length) {
-        // Enrich with MySQL data where possible.
+        // Enrich with MySQL data where possible. Must apply the SAME extraWhere
+        // as Pass 1 (e.g. "channel_id != 3 AND status = 'SUCCESS'") — otherwise a
+        // GIP job for a row that fails the business filter would still leak into
+        // the failed bucket via this enrichment lookup.
         const placeholders = extraFailedIds.map(() => '?').join(',');
         const columns = sourceConfig.selectFields?.length ? sourceConfig.selectFields.join(', ') : '*';
         const extraRows: any[] = await this.mysql
           .query(
             dbName,
-            `SELECT ${columns} FROM ${sourceConfig.tableName} WHERE ${sourceConfig.refDocField} IN (${placeholders})`,
+            `SELECT ${columns} FROM ${sourceConfig.tableName} WHERE ${sourceConfig.refDocField} IN (${placeholders})${sourceConfig.extraWhere ? ` AND ${sourceConfig.extraWhere}` : ''}`,
             extraFailedIds,
           )
           .catch(() => []);
@@ -648,7 +661,11 @@ export class SyncGapService {
         for (const refDocNo of extraFailedIds) {
           const gip = extraJobMap.get(refDocNo);
           if (!gip) continue;
-          const mysqlRow = mysqlMap.get(refDocNo) ?? { [refDocField]: refDocNo };
+          // No matching row means it either no longer exists in MySQL or (far more
+          // commonly) failed extraWhere — either way it's not a source record we're
+          // reconciling for this event, so skip it rather than showing a bare stub.
+          const mysqlRow = mysqlMap.get(refDocNo);
+          if (!mysqlRow) continue;
           const gipStatus = gip.hasFailed ? 'failed' : 'processing';
           failed.push({
             ...mysqlRow,
@@ -656,6 +673,7 @@ export class SyncGapService {
             gipJobId:    gip.latestJobId,
             gipJobError: gip.latestJobError,
           });
+          extraFailedCount++;
         }
       }
     }
