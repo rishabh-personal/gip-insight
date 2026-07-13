@@ -49,6 +49,17 @@ async function bootstrap() {
   const { ExpressAdapter } = await import('@nestjs/platform-express');
 
   const app = await NestFactory.create(AppModule, new ExpressAdapter(), { bufferLogs: true });
+
+  // The web app always proxies /api/dashboard/* through Next.js (see
+  // apps/web/next.config.ts rewrites), so every request NestJS sees arrives
+  // from the gip-web container's IP, not the real browser's IP. Without
+  // trusting the proxy, Express's req.ip (used by ThrottlerGuard to bucket
+  // rate limits) collapses to that single container IP for every user —
+  // meaning the entire app shares ONE global rate-limit budget instead of
+  // one per real client. Trusting the first hop lets req.ip fall back to
+  // X-Forwarded-For when present, and is a no-op if no such header exists.
+  app.getHttpAdapter().getInstance().set('trust proxy', 1);
+
   app.enableCors({ origin: '*' });
   app.useGlobalPipes(new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: false }));
   app.useGlobalInterceptors(new ResponseInterceptor());

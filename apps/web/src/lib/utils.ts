@@ -11,7 +11,7 @@ export function formatDate(date: string | Date | null | undefined): string {
   return format(new Date(date), 'dd MMM yyyy, HH:mm');
 }
 
-export type DatePreset = 'today' | 'yesterday' | '1h' | '6h' | '24h' | '7d' | '30d';
+export type DatePreset = 'today' | 'yesterday' | '24h' | '3d' | '7d' | '15d' | '30d';
 
 export function getPresetRange(preset: DatePreset): { from: Date; to: Date } {
   const now = new Date();
@@ -23,10 +23,10 @@ export function getPresetRange(preset: DatePreset): { from: Date; to: Date } {
     return { from: startOfDay(yesterday), to: endOfDay(yesterday) };
   }
   const presetMap: Record<Exclude<DatePreset, 'today' | 'yesterday'>, Date> = {
-    '1h':  subHours(now, 1),
-    '6h':  subHours(now, 6),
     '24h': subHours(now, 24),
+    '3d':  subDays(now, 3),
     '7d':  subDays(now, 7),
+    '15d': subDays(now, 15),
     '30d': subDays(now, 30),
   };
   return { from: presetMap[preset], to: now };

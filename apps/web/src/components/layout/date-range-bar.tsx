@@ -10,10 +10,10 @@ import { CalendarDays, Check } from 'lucide-react';
 const PRESETS: { label: string; value: DatePreset }[] = [
   { label: 'Today',     value: 'today'     },
   { label: 'Yesterday', value: 'yesterday' },
-  { label: '1H',        value: '1h'        },
-  { label: '6H',        value: '6h'        },
   { label: '24H',       value: '24h'       },
+  { label: '3D',        value: '3d'        },
   { label: '7D',        value: '7d'        },
+  { label: '15D',       value: '15d'       },
   { label: '30D',       value: '30d'       },
 ];
 
